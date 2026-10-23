@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate, login, logout
 from django.middleware.csrf import get_token
 from django.middleware.csrf import CsrfViewMiddleware
+import re
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -33,10 +34,15 @@ def register(request):
     email = str(request.data.get("email", "")).strip().lower()
     name = str(request.data.get("name", "")).strip()
     password = str(request.data.get("password", ""))
-    if not email or "@" not in email or not name or len(password) < 12:
+    if (
+        not email
+        or "@" not in email
+        or not name
+        or re.fullmatch(r"[A-Za-z0-9]{6,}", password) is None
+    ):
         return Response(
             {
-                "detail": "Informe email válido, nome e senha com ao menos 12 caracteres."
+                "detail": "Informe email válido, nome e senha com pelo menos 6 caracteres, usando apenas letras e números."
             },
             status=400,
         )

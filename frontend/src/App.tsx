@@ -50,8 +50,18 @@ export default function App() {
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
+    const submitted = Object.fromEntries(new FormData(event.currentTarget));
+    if (
+      mode === "register" &&
+      !/^[A-Za-z0-9]{6,}$/.test(String(submitted.password ?? ""))
+    ) {
+      setMessage(
+        "A senha deve ter pelo menos 6 caracteres, usando apenas letras e números.",
+      );
+      return;
+    }
     setBusy(true);
-    const values = Object.fromEntries(new FormData(event.currentTarget));
+    const values = submitted;
     try {
       const headers = await csrfHeaders();
       if (mode === "register")
@@ -197,8 +207,14 @@ export default function App() {
                   mode === "login" ? "current-password" : "new-password"
                 }
                 required
-                minLength={mode === "register" ? 12 : undefined}
+                minLength={mode === "register" ? 6 : undefined}
+                pattern={mode === "register" ? "[A-Za-z0-9]+" : undefined}
               />
+              {mode === "register" && (
+                <small>
+                  Use pelo menos 6 caracteres, somente letras e números.
+                </small>
+              )}
             </label>
             <button disabled={busy}>
               {busy ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}
@@ -258,19 +274,27 @@ export default function App() {
               Ainda não há residências. Crie a primeira para começar.
             </p>
           )}
-          <form onSubmit={createHouse} className="create-house">
-            <label htmlFor="house-name">Criar residência</label>
-            <div>
-              <input
-                id="house-name"
-                name="name"
-                placeholder="Ex.: Casa da família"
-                maxLength={120}
-                required
-              />
-              <button disabled={busy}>Criar</button>
-            </div>
-          </form>
+          {!houses.length && (
+            <form onSubmit={createHouse} className="create-house">
+              <label htmlFor="house-name">Criar residência</label>
+              <div>
+                <input
+                  id="house-name"
+                  name="name"
+                  placeholder="Ex.: Casa da família"
+                  maxLength={120}
+                  required
+                />
+                <button disabled={busy}>Criar</button>
+              </div>
+            </form>
+          )}
+          {houses.length > 0 && (
+            <p className="empty">
+              Você já participa de uma residência. Para participar de outra,
+              será necessário sair da atual.
+            </p>
+          )}
           {inviteToken && (
             <div className="invite-token" role="status">
               <label htmlFor="issued-invite-token">

@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 
@@ -41,7 +42,12 @@ class Membership(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=("household", "user"), name="unique_household_user"
-            )
+            ),
+            models.UniqueConstraint(
+                fields=("user",),
+                condition=Q(status="active"),
+                name="unique_active_membership_per_user",
+            ),
         ]
 
 

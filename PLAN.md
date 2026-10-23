@@ -557,6 +557,9 @@ Tarefas:
 - [x] Criar verificação reutilizável de membership ativo e papel.
 - [x] Criar interface autenticada e navegação inicial de contas/residências.
 - [x] Criar testes de isolamento entre residências.
+- [x] Exigir senha de cadastro de pelo menos 6 caracteres alfanuméricos, sem símbolos e sem exigência de maiúsculas; login legado permanece compatível.
+- [x] Garantir uma única membership ativa por usuário com constraint parcial no banco e proteção transacional contra concorrência; criação de segunda residência e convite para outra residência conflitam sem alteração de membership.
+- [x] Ocultar criação de residência na interface quando já houver uma residência e documentar diagnóstico de duplicatas legadas antes da migration.
 
 Critérios de aceite:
 - [x] Dois usuários independentes podem participar da mesma residência via convite de uso único.
