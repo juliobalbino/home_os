@@ -94,53 +94,6 @@ jobs:
           git archive --format=tar "$GITHUB_SHA" | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "tar -xf - -C '${release_path}' && ln -sfn '${DEPLOY_PATH%/}/.env' '${release_path}/.env'"
-      - name: Reset test database once when explicitly marked
-        if: github.event_name == 'push' && github.ref == 'refs/heads/tests' && contains(github.event.head_commit.message, '[reset-test-db-once]')
-        env:
-          DEPLOY_HOST: ${{ vars.TEST_DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.TEST_DEPLOY_USER }}
-          DEPLOY_PATH: ${{ vars.TEST_DEPLOY_PATH }}
-          GITHUB_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "DEPLOY_PATH='${DEPLOY_PATH%/}' GITHUB_SHA='${GITHUB_SHA}' bash -s" <<'REMOTE'
-          set -eu
-          deploy_path="$DEPLOY_PATH"
-          marker="$deploy_path/.test-db-reset-once"
-          lock="$marker.lock"
-          if test -e "$marker"; then
-            echo 'Test database reset already completed; skipping.'
-            exit 0
-          fi
-          if ! mkdir "$lock" 2>/dev/null; then
-            echo 'Test database reset is already in progress; refusing a second reset.'
-            exit 1
-          fi
-          trap 'rmdir "$lock"' EXIT
-          if test -e "$marker"; then
-            echo 'Test database reset already completed; skipping.'
-            exit 0
-          fi
-          cd "$deploy_path/releases/$GITHUB_SHA"
-          sudo docker compose -p homeos-tests -f docker-compose.test.yml exec -T backend python manage.py shell <<'PYTHON'
-          from django.db import transaction
-          from django.contrib.sessions.models import Session
-          from apps.households.models import Invitation, Membership, Household
-          from apps.accounts.models import User
-
-          models = [Session, Invitation, Membership, Household, User]
-          with transaction.atomic():
-              for model in models:
-                  model.objects.all().delete()
-              counts = [model.objects.count() for model in models]
-              print("RESET_COUNTS", *counts)
-              if any(count != 0 for count in counts):
-                  raise RuntimeError("Reset verification failed")
-          PYTHON
-          touch "$marker"
-          REMOTE
       - name: Build, migrate, and verify test health endpoint
         env:
           DEPLOY_HOST: ${{ vars.TEST_DEPLOY_HOST }}
