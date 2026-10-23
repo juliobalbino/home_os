@@ -1,6 +1,6 @@
 # Home OS
 
-Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. A Fase 1 implementa contas, sessões, residências e permissões; o progresso confirmado está no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
+Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1 (contas/residências) e 2 (finanças básicas) estão implementadas e verificadas conforme o [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
 
 ## Executar com Docker Compose
 
@@ -52,6 +52,31 @@ PowerShell: `$env:HOME_OS_TEST_SQLITE='true'; python manage.py test`. PostgreSQL
 - Membership ativo é verificado no servidor. `viewer` não pode executar operações de escrita autorizadas para membros; convites são restritos ao owner.
 - Cada usuário pode ter somente uma membership ativa, garantida por constraint única parcial no banco e validação transacional. Criar residência ou aceitar convite de outra residência retorna `409 Conflict` quando já participa de uma. A interface oculta o formulário de criação enquanto participa de uma residência.
 
+### Finanças (Fase 2)
+
+Todas as rotas abaixo usam `/api/v1/`, sessão autenticada e isolamento por membership ativo da residência. Escritas exigem CSRF; `viewer` tem somente leitura. Valores monetários na API são inteiros positivos `amount_minor` em centavos; valores decimais/float não são aceitos.
+
+| Método e endpoint | Payload/resultado |
+|---|---|
+| `GET /finance/categories?household_id={uuid}` | Lista `{id,name,kind}`. |
+| `POST /finance/categories` | `{household_id,name,kind?}`; cria categoria ativa. |
+| `GET /households/{id}/members` | Inclui `id` (membership), `name`, `email`, `role`. |
+| `GET /households/{id}/expenses` | Lista detalhes com valor, status, pagamentos e divisões vigentes. |
+| `POST /households/{id}/expenses` | `{description,category_id,amount_minor,incurred_on,split_method,splits:[...]}`. `split_method`: `equal` (`membership_id`), `percentage` (`membership_id,percent` decimal com até 4 casas, somando exatamente 100; envie como string) ou `fixed` (`membership_id,amount_minor` somando total). |
+| `GET /expenses/{id}` | Detalhe; residência alheia ou inexistente responde 404. |
+| `PUT /expenses/{id}/splits` | `{split_method,splits:[...]}`; substitui a divisão vigente atomicamente, preservando versões antigas. |
+| `POST /expenses/{id}/payments` | `{payer_id,amount_minor,notes?}`. O valor representa pagamento efetivo à conta/fornecedor. |
+| `GET /households/{id}/budgets/{AAAA-MM}` | Lista orçamentos do mês (`category_id: null` é geral). |
+| `PUT /households/{id}/budgets/{AAAA-MM}` | `{amount_minor,category_id?}`; cria/atualiza orçamento geral ou de categoria. |
+| `GET /households/{id}/financial-summary?period={AAAA-MM}` | `spent_total`, `budget_total` e despesas do mês. |
+| `GET /households/{id}/settlements` | Por membro: `paid_minor`, `owed_minor`, `balance_minor`. |
+
+Pagamentos são a fonte única para saber quem pagou; não existe atribuição duplicada `paid_by` na despesa. `paid_total` é a soma dos pagamentos; status é `unpaid`, `partial` ou `paid` comparado ao total. Obrigação de cada morador permanece na divisão mesmo após pagamento: saldo = pagamentos feitos por ele menos sua parcela vigente (positivo é crédito; negativo é dívida). Não há transferências nem reembolsos entre moradores nesta fase. Percentuais aceitam até 4 casas decimais e são calculados por unidades inteiras escaladas (sem float); o rateio em centavos usa maiores restos, com desempate por membership id. Divisões iguais distribuem sobras também por membership id. Criação de categorias, despesas, pagamentos e orçamentos é registrada em `AuditEvent` minimizado. Resumos rejeitam períodos inválidos com HTTP 400, e a interface oculta controles de escrita para viewers enquanto mantém a consulta financeira.
+
+`budget_total` usa o orçamento geral do mês quando definido, sem somar categorias adicionais; se não houver orçamento geral, soma os orçamentos por categoria. O período financeiro padrão usa a data local `America/Sao_Paulo` no backend e o ano/mês locais do navegador na interface.
+
+Validação financeira local com SQLite de teste: `HOME_OS_TEST_SQLITE=true python manage.py test apps.finance` (PowerShell: `$env:HOME_OS_TEST_SQLITE='true'; python manage.py test apps.finance`). A aplicação permanece configurada para PostgreSQL por padrão; esses testes não demonstram execução real em PostgreSQL.
+
 Antes de aplicar a migration que adiciona a unicidade, diagnostique possíveis duplicatas legadas sem alterá-las automaticamente:
 
 ```sql
@@ -88,4 +113,4 @@ Para rodar o frontend fora do Compose, inicie a API local e configure `VITE_API_
 - `frontend/src/`: interface, estilos e testes.
 - `docker-compose.yml`: frontend, API e banco para desenvolvimento.
 
-Finanças, listas/compras, estoque, tarefas e IA não estão implementados nesta fase.
+Listas/compras, estoque, tarefas e IA permanecem fora das Fases 1 e 2.

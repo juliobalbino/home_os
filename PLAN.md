@@ -575,22 +575,27 @@ Critérios de aceite:
 **Estimativa:** 4–6 dias.
 
 Tarefas:
-- [ ] Implementar categorias.
-- [ ] Implementar criação/listagem/detalhe de despesas.
-- [ ] Implementar divisões iguais, percentuais e valores fixos.
-- [ ] Implementar pagamentos.
-- [ ] Implementar orçamento mensal.
-- [ ] Implementar resumo financeiro.
-- [ ] Implementar audit log para alterações relevantes.
-- [ ] Criar interface para cadastrar e visualizar despesas.
-- [ ] Cobrir arredondamento e saldo a acertar com testes.
+- [x] Implementar categorias.
+- [x] Implementar criação/listagem/detalhe de despesas.
+- [x] Implementar divisões iguais, percentuais e valores fixos.
+- [x] Implementar pagamentos.
+- [x] Implementar orçamento mensal geral ou por categoria.
+- [x] Implementar resumo financeiro e saldo por membro.
+- [x] Implementar audit log para criação de despesas, pagamentos e definição de orçamento.
+- [x] Criar interface para cadastrar/listar despesas, categorias, divisões, pagamentos, orçamento e saldos.
+- [x] Cobrir arredondamento, histórico de divisões, pagamentos e saldo com testes.
+- [x] Somar orçamento geral com precedência sobre orçamentos por categoria, auditar criação de categoria atomicamente e usar período local.
 
 Critérios de aceite:
-- [ ] Despesa de R$ 300,00 dividida igualmente gera R$ 150,00 por pessoa.
-- [ ] A soma das parcelas fecha exatamente o valor da despesa.
-- [ ] Pagamento parcial não marca automaticamente a despesa como totalmente paga.
-- [ ] Totais do dashboard correspondem aos registros.
-- [ ] Operações inválidas não persistem dados parcialmente.
+- [x] Despesa de R$ 300,00 dividida igualmente gera R$ 150,00 por pessoa.
+- [x] A soma das parcelas fecha exatamente o valor da despesa.
+- [x] Pagamento parcial não marca automaticamente a despesa como totalmente paga.
+- [x] Totais do resumo financeiro correspondem aos registros.
+- [x] Operações inválidas não persistem dados parcialmente.
+
+**Progresso verificado:** app modular `finance`, app mínimo `audit`, migrations, endpoints versionados e interface integrados à navegação; membership id exposto na listagem de membros. Payment representa pagamento efetivo externo; os registros Payment são a única fonte de quem pagou. O saldo por membro é pagamentos feitos menos obrigação vigente, sem transferências/reembolsos entre moradores. Divisões antigas são preservadas ao substituir a vigente. `budget_total` considera somente o orçamento geral se existir no mês; caso contrário, soma orçamentos por categoria. O default do período usa `America/Sao_Paulo` no backend e a data local no navegador.
+
+**Verificações executadas:** backend: `HOME_OS_TEST_SQLITE=true python manage.py test` (33 testes), `check`, `makemigrations --check --dry-run`, `migrate --noinput`, Ruff check e format check. Frontend: `npm test` (10 testes), ESLint, Prettier check, build de produção e `npm audit` (0 vulnerabilidades). Os testes/migrações usam SQLite por opção explícita; PostgreSQL real, Compose e integração ponta a ponta navegador/API não foram exercitados nesta execução.
 
 ### Fase 3 — Compras e estoque
 
