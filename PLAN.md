@@ -549,21 +549,23 @@ Critérios de aceite:
 **Estimativa:** 3–5 dias.
 
 Tarefas:
-- [ ] Configurar modelo de usuário apropriado antes da primeira migração.
-- [ ] Implementar login/logout e sessão segura.
-- [ ] Implementar `Household` e `Membership`.
-- [ ] Implementar criação de residência.
-- [ ] Implementar inclusão de segundo membro (convite ou fluxo inicial administrativo seguro).
-- [ ] Criar verificações reutilizáveis de membership e papel.
-- [ ] Criar layout autenticado e navegação principal.
-- [ ] Criar testes de isolamento entre residências.
+- [x] Configurar modelo de usuário apropriado antes da primeira migração (email único normalizado; migration inicial criada).
+- [x] Implementar cadastro, login/logout e sessão por cookie com proteção CSRF.
+- [x] Implementar `Household`, `Membership` e papéis `owner`, `member` e `viewer`.
+- [x] Implementar criação de residência com criador owner.
+- [x] Implementar convite por token aleatório de uso único, armazenado como hash e expirável em sete dias; sem envio de e-mail.
+- [x] Criar verificação reutilizável de membership ativo e papel.
+- [x] Criar interface autenticada e navegação inicial de contas/residências.
+- [x] Criar testes de isolamento entre residências.
 
 Critérios de aceite:
-- [ ] Dois usuários independentes podem participar da mesma residência.
-- [ ] Um usuário não acessa dados de residência alheia manipulando URLs.
-- [ ] Rotas privadas exigem autenticação.
-- [ ] Logout invalida a sessão.
-- [ ] O papel `viewer`, se implementado, não consegue escrever.
+- [x] Dois usuários independentes podem participar da mesma residência via convite de uso único.
+- [x] Um usuário não acessa residência alheia manipulando URLs (404 sem revelar sua existência).
+- [x] Rotas privadas exigem autenticação.
+- [x] Logout invalida a sessão.
+- [x] `viewer` não pode executar operações protegidas como escrita/criação de convites.
+
+**Progresso verificado:** suíte backend (8 testes) e frontend (3 testes), lint, formatação, build e checks Django executados localmente; migrations iniciais presentes e `makemigrations --check --dry-run` sem alterações pendentes. Testes usam SQLite em memória somente com `HOME_OS_TEST_SQLITE=true`; PostgreSQL permanece como padrão da aplicação. Docker daemon indisponível nesta máquina; Compose e PostgreSQL real não foram exercitados.
 
 ### Fase 2 — Finanças básicas
 
