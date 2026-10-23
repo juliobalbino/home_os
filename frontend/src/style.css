@@ -1,0 +1,72 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap");
+
+:root {
+  font-family: "DM Sans", sans-serif;
+  color: #193c35;
+  background: #f7f5ef;
+  font-synthesis: none;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+.shell {
+  width: min(680px, calc(100% - 48px));
+  margin: 17vh auto 0;
+}
+.eyebrow {
+  color: #71867f;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+h1 {
+  max-width: 600px;
+  margin: 22px 0 12px;
+  font:
+    800 clamp(42px, 8vw, 68px) / 1.04 Manrope,
+    sans-serif;
+  letter-spacing: -0.055em;
+}
+.intro {
+  color: #687b74;
+  font-size: 18px;
+  line-height: 1.6;
+}
+.status {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-top: 54px;
+  padding: 20px 22px;
+  border: 1px solid #dce4dd;
+  border-radius: 14px;
+  background: #fffefa;
+  box-shadow: 0 8px 30px #193c350a;
+}
+.indicator {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #d39a46;
+}
+.indicator.healthy {
+  background: #42856b;
+}
+.indicator.failed {
+  background: #bd594b;
+}
+.status strong {
+  font-size: 14px;
+}
+.status p {
+  margin: 5px 0 0;
+  color: #718078;
+  font-size: 14px;
+}
