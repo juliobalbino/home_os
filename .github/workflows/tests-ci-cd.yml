@@ -1,0 +1,113 @@
+name: Tests environment CI and deploy
+
+on:
+  pull_request:
+    branches: [tests]
+  push:
+    branches: [tests]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt
+      - name: Run backend tests and Ruff
+        working-directory: backend
+        run: |
+          python manage.py test
+          ruff check .
+          ruff format --check .
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Run frontend tests, lint, and build
+        working-directory: frontend
+        run: |
+          npm test
+          npm run lint
+          npm run build
+      - name: Validate test Compose configuration
+        run: docker compose --env-file .env.example -f docker-compose.test.yml config --quiet
+
+  deploy:
+    name: Deploy to tests environment
+    if: github.event_name == 'push' && github.ref == 'refs/heads/tests'
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Configure pinned SSH host key
+        env:
+          SSH_KNOWN_HOSTS: ${{ vars.TEST_DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$SSH_KNOWN_HOSTS" || { echo "TEST_DEPLOY_SSH_KNOWN_HOSTS variable is required" >&2; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Install dedicated deploy key
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.TEST_DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$DEPLOY_SSH_PRIVATE_KEY" || { echo "TEST_DEPLOY_SSH_PRIVATE_KEY secret is required" >&2; exit 1; }
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+      - name: Transfer checked-out commit to isolated test release
+        env:
+          DEPLOY_HOST: ${{ vars.TEST_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.TEST_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.TEST_DEPLOY_PATH }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$DEPLOY_PATH" || { echo "TEST_DEPLOY_HOST, TEST_DEPLOY_USER, and TEST_DEPLOY_PATH variables are required" >&2; exit 1; }
+          test -n "$GITHUB_SHA" || { echo "GITHUB_SHA is required" >&2; exit 1; }
+          release_path="${DEPLOY_PATH%/}/releases/${GITHUB_SHA}"
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "test -f '${DEPLOY_PATH%/}/.env' && mkdir -p '${release_path}'"
+          git archive --format=tar "$GITHUB_SHA" | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "tar -xf - -C '${release_path}' && ln -sfn '${DEPLOY_PATH%/}/.env' '${release_path}/.env'"
+      - name: Build, migrate, and verify test health endpoint
+        env:
+          DEPLOY_HOST: ${{ vars.TEST_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.TEST_DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.TEST_DEPLOY_PATH }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd '${DEPLOY_PATH%/}/releases/${GITHUB_SHA}' && sudo docker compose -p homeos-tests -f docker-compose.test.yml up -d --build && sudo docker compose -p homeos-tests -f docker-compose.test.yml exec -T backend python manage.py migrate --noinput && sudo docker compose -p homeos-tests -f docker-compose.test.yml ps"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error https://homeostests.juliobalbino.com.br/api/v1/health >/dev/null; then
+              echo "Test health endpoint is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Test health endpoint did not become healthy within 5 minutes." >&2
+          exit 1

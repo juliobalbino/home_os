@@ -49,6 +49,12 @@ docker compose -f docker-compose.prod.yml down
 
 Para voltar à imagem anterior após uma atualização, faça checkout da revisão anterior e reconstrua/inicie a mesma configuração; migrações de banco não são revertidas automaticamente, então avalie compatibilidade de schema antes do rollback. Mantenha backup do PostgreSQL antes de atualizações que alterem dados. Não use `down -v` a menos que queira apagar permanentemente o volume e os dados do banco.
 
+## Independent test environment
+
+The `tests` branch uses `.github/workflows/tests-ci-cd.yml` and `docker-compose.test.yml`. Pull requests targeting `tests` and pushes to `tests` run the same backend/frontend CI checks as production; only a successful push deploys. Configure dedicated Actions variables `TEST_DEPLOY_HOST`, `TEST_DEPLOY_USER`, `TEST_DEPLOY_PATH` (for example `/home/ubuntu/prj-tests`), and `TEST_DEPLOY_SSH_KNOWN_HOSTS`, plus the dedicated `TEST_DEPLOY_SSH_PRIVATE_KEY` secret. Pin the host key after independently verifying it. The test deployment expects its own persistent `.env` at `${TEST_DEPLOY_PATH}/.env` with strong `DJANGO_SECRET_KEY` and `POSTGRES_PASSWORD` values; it never reads or changes `/home/ubuntu/prj/.env`.
+
+Releases are retained under `${TEST_DEPLOY_PATH}/releases/<commit>` and deployed using Compose project `homeos-tests` with `docker-compose.test.yml`. This gives the test database its own named volume and the frontend a unique Pangolin alias (`homeos-tests-frontend`), avoiding production resource/DNS conflicts. Deploy runs migrations and checks `https://homeostests.juliobalbino.com.br/api/v1/health`. Keep the test path separate from production.
+
 ## GitHub Actions CI/CD
 
 O workflow `.github/workflows/ci-cd.yml` executa CI em pull requests destinados a `main` e em pushes para `main`. O deploy ocorre exclusivamente após CI passar em um push para `main`; pull requests e outras branches nunca fazem deploy. O workflow empacota com `git archive` o conteúdo rastreado do commit verificado e o transfere por tar sobre SSH para um diretório limpo `/home/ubuntu/prj/releases/GITHUB_SHA`. Cada revisão fica isolada no seu próprio diretório. O `.env` ignorado existente em `/home/ubuntu/prj/.env` é preservado e ligado simbolicamente a cada release; o deploy falha se esse arquivo não existir. Nenhum pacote é instalado no VPS.
