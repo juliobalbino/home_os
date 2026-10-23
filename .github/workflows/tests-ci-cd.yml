@@ -101,7 +101,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd '${DEPLOY_PATH%/}/releases/${GITHUB_SHA}' && sudo docker compose -p homeos-tests -f docker-compose.test.yml up -d --build && sudo docker compose -p homeos-tests -f docker-compose.test.yml exec -T backend python manage.py migrate --noinput && sudo docker compose -p homeos-tests -f docker-compose.test.yml ps"
+            "cd '${DEPLOY_PATH%/}/releases/${GITHUB_SHA}' && sudo docker compose -p homeos-tests -f docker-compose.test.yml up -d --build --remove-orphans && sudo docker compose -p homeos-tests -f docker-compose.test.yml exec -T backend python manage.py migrate --noinput && sudo docker compose -p homeos-tests -f docker-compose.test.yml ps"
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error https://homeostests.juliobalbino.com.br/api/v1/health >/dev/null; then
               echo "Test health endpoint is healthy."
