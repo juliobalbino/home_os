@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -6,6 +6,7 @@ from rest_framework.response import Response
 
 from apps.households.models import Household, Invitation, Membership
 from apps.households.permissions import require_membership
+from apps.accounts.models import User
 
 
 def serialize(household, membership):
@@ -31,11 +32,19 @@ def households(request):
         return Response(
             {"name": ["Informe um nome de até 120 caracteres."]}, status=400
         )
-    with transaction.atomic():
-        household = Household.objects.create(name=name, created_by=request.user)
-        membership = Membership.objects.create(
-            household=household, user=request.user, role=Membership.Role.OWNER
-        )
+    try:
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            if Membership.objects.filter(user=request.user, status="active").exists():
+                return Response(
+                    {"detail": "Você já participa de uma residência."}, status=409
+                )
+            household = Household.objects.create(name=name, created_by=request.user)
+            membership = Membership.objects.create(
+                household=household, user=request.user, role=Membership.Role.OWNER
+            )
+    except IntegrityError:
+        return Response({"detail": "Você já participa de uma residência."}, status=409)
     return Response(serialize(household, membership), status=201)
 
 
@@ -76,6 +85,7 @@ def invitations(request, household_id):
 def accept_invitation(request, token):
     digest = Invitation.hash_token(token)
     with transaction.atomic():
+        User.objects.select_for_update().get(pk=request.user.pk)
         invitation = (
             Invitation.objects.select_for_update()
             .filter(
@@ -88,6 +98,17 @@ def accept_invitation(request, token):
         if invitation is None:
             return Response(
                 {"detail": "Convite inválido, expirado ou já utilizado."}, status=404
+            )
+        if (
+            Membership.objects.filter(user=request.user, status="active")
+            .exclude(household_id=invitation.household_id)
+            .exists()
+        ):
+            return Response(
+                {
+                    "detail": "Você já participa de outra residência e não pode aceitar este convite."
+                },
+                status=409,
             )
         membership, created = Membership.objects.get_or_create(
             household=invitation.household,

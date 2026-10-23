@@ -14,7 +14,7 @@ class AccountFlowTests(TestCase):
             {
                 "email": "no-csrf@example.com",
                 "name": "Person",
-                "password": "long-password-123",
+                "password": "longPassword123",
             },
             format="json",
         )
@@ -25,7 +25,7 @@ class AccountFlowTests(TestCase):
             {
                 "email": " Person@Example.com ",
                 "name": "Person",
-                "password": "long-password-123",
+                "password": "longPassword123",
             },
             format="json",
             HTTP_X_CSRFTOKEN=token,
@@ -33,17 +33,17 @@ class AccountFlowTests(TestCase):
         self.assertEqual(response.status_code, 201)
         user = User.objects.get()
         self.assertEqual(user.email, "person@example.com")
-        self.assertTrue(user.check_password("long-password-123"))
+        self.assertTrue(user.check_password("longPassword123"))
         self.assertIn("csrftoken", self.client.cookies)
 
     def test_login_rejects_missing_csrf_and_accepts_bootstrapped_token(self):
         User.objects.create_user(
-            email="a@example.com", name="A", password="safe-password-123"
+            email="a@example.com", name="A", password="legacy-password!"
         )
         self.assertEqual(
             self.client.post(
                 "/api/v1/auth/login",
-                {"email": "a@example.com", "password": "safe-password-123"},
+                {"email": "a@example.com", "password": "legacy-password!"},
                 format="json",
             ).status_code,
             403,
@@ -51,11 +51,34 @@ class AccountFlowTests(TestCase):
         token = self.client.get("/api/v1/auth/csrf").json()["csrfToken"]
         response = self.client.post(
             "/api/v1/auth/login",
-            {"email": "a@example.com", "password": "safe-password-123"},
+            {"email": "a@example.com", "password": "legacy-password!"},
             format="json",
             HTTP_X_CSRFTOKEN=token,
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_registration_requires_six_alphanumeric_characters_only(self):
+        token = self.client.get("/api/v1/auth/csrf").json()["csrfToken"]
+        for password in ("abc12", "abc123!"):
+            response = self.client.post(
+                "/api/v1/auth/register",
+                {
+                    "email": f"{password}@example.com",
+                    "name": "Person",
+                    "password": password,
+                },
+                format="json",
+                HTTP_X_CSRFTOKEN=token,
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("letras e números", response.json()["detail"])
+        response = self.client.post(
+            "/api/v1/auth/register",
+            {"email": "valid@example.com", "name": "Person", "password": "abc123"},
+            format="json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 201)
 
     def test_session_logout_invalidates_private_endpoint(self):
         user = User.objects.create_user(

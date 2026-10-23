@@ -33,7 +33,7 @@ describe("authenticated account interface", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows household navigation and create form for an authenticated user", async () => {
+  it("hides household creation when the user already belongs to a household", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       if (String(input).endsWith("/me"))
         return new Response(
@@ -52,7 +52,56 @@ describe("authenticated account interface", () => {
     expect(
       screen.getByRole("navigation", { name: "Navegação principal" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Criar residência")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Criar residência")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/já participa de uma residência/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows household creation when the user has no household", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).endsWith("/me"))
+        return new Response(
+          JSON.stringify({ id: 1, name: "Ana", email: "ana@example.com" }),
+        );
+      if (String(input).endsWith("/households"))
+        return new Response(JSON.stringify([]));
+      return new Response(JSON.stringify({ detail: "unauthorized" }), {
+        status: 401,
+      });
+    });
+    render(<App />);
+    expect(
+      await screen.findByLabelText("Criar residência"),
+    ).toBeInTheDocument();
+  });
+
+  it("validates registration passwords as six or more alphanumeric characters", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "unauthorized" }), {
+        status: 401,
+      }),
+    );
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Criar uma conta" }),
+    );
+    const password = screen.getByLabelText(/Senha/);
+    fireEvent.change(password, {
+      target: { value: "abc12" },
+    });
+    fireEvent.submit(password.closest("form")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /pelo menos 6 caracteres/i,
+    );
+    fireEvent.change(password, {
+      target: { value: "abc123!" },
+    });
+    fireEvent.submit(password.closest("form")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /letras e números/i,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates a one-time invitation for an owner and displays the token", async () => {
