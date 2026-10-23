@@ -26,6 +26,8 @@ INSTALLED_APPS = [
     "apps.health",
     "apps.accounts",
     "apps.households",
+    "apps.finance",
+    "apps.audit",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

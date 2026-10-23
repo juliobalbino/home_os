@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import Finance from "./modules/finance/Finance";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type User = { id: number; email: string; name: string };
@@ -32,6 +33,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [acceptToken, setAcceptToken] = useState("");
+  const [financeHousehold, setFinanceHousehold] = useState("");
 
   async function refresh() {
     try {
@@ -230,6 +232,17 @@ export default function App() {
             {mode === "login" ? "Criar uma conta" : "Já tenho uma conta"}
           </button>
         </section>
+      ) : financeHousehold &&
+        houses.some((house) => house.id === financeHousehold) ? (
+        <section>
+          <button className="quiet" onClick={() => setFinanceHousehold("")}>
+            Voltar ao início
+          </button>
+          <Finance
+            householdId={financeHousehold}
+            role={houses.find((house) => house.id === financeHousehold)!.role}
+          />
+        </section>
       ) : (
         <section>
           <p className="eyebrow">OLÁ, {user.name.toLocaleUpperCase("pt-BR")}</p>
@@ -247,6 +260,9 @@ export default function App() {
                 <article className="house-card" key={house.id}>
                   <div>
                     <h3>{house.name}</h3>
+                    <button onClick={() => setFinanceHousehold(house.id)}>
+                      Abrir finanças
+                    </button>
                     <p>
                       Seu papel:{" "}
                       {house.role === "owner"

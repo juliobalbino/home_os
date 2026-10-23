@@ -63,7 +63,10 @@ def members(request, household_id):
         household_id=household_id, status="active"
     ).select_related("user")
     return Response(
-        [{"name": m.user.name, "email": m.user.email, "role": m.role} for m in qs]
+        [
+            {"id": m.id, "name": m.user.name, "email": m.user.email, "role": m.role}
+            for m in qs
+        ]
     )
 
 
