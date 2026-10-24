@@ -239,6 +239,45 @@ button:disabled {
 .invite-token small {
   color: #718078;
 }
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+}
+.dashboard-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #dce4dd;
+  border-radius: 14px;
+  background: #fffefa;
+}
+.dashboard-card h2 {
+  margin: 0 0 16px;
+  font:
+    700 20px Manrope,
+    sans-serif;
+}
+.dashboard-card strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+}
+.dashboard-card a {
+  display: inline-block;
+  margin-top: 14px;
+  color: #245b49;
+  font-weight: 700;
+}
+.dashboard-card ul {
+  padding-left: 20px;
+  line-height: 1.7;
+}
+@media (max-width: 640px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 560px) {
   .auth-card {
     margin-top: 8vh;
