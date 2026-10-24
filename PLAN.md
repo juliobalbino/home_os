@@ -655,20 +655,24 @@ Critérios de aceite:
 **Estimativa:** 2–4 dias.
 
 Tarefas:
-- [ ] Criar dashboard com gastos, orçamento, acertos, lista e tarefas.
-- [ ] Implementar estados de carregamento, vazio e erro.
-- [ ] Melhorar validação e mensagens de erro.
-- [ ] Executar testes de integração e ponta a ponta.
-- [ ] Configurar logging sem segredos.
-- [ ] Documentar backup e restauração.
-- [ ] Testar build de produção local.
+- [x] Criar dashboard com gastos, orçamento, acertos, lista e tarefas via APIs existentes.
+- [x] Implementar estados independentes de carregamento, vazio e erro por seção.
+- [x] Atalhos acessíveis para os módulos existentes e layout responsivo.
+- [x] Cobrir renderização de dados reais simulados, erro isolado de seção e conteúdo disponível.
+- [x] Documentar backup/restore PostgreSQL com `pg_dump`/`pg_restore` e restauração somente em banco isolado.
+- [x] Verificar build de produção local.
+- [ ] Testes ponta a ponta com PostgreSQL/navegador real não executados nesta fase.
 
 Critérios de aceite:
-- [ ] O dashboard usa dados reais da API.
-- [ ] Os principais fluxos funcionam em desktop e celular.
-- [ ] Testes críticos passam.
-- [ ] O MVP funciona sem IA.
-- [ ] Existe procedimento documentado para restaurar o banco.
+- [x] O dashboard consulta dados reais das APIs existentes.
+- [x] O layout responde a telas estreitas; teste E2E em dispositivos reais pendente.
+- [x] Testes críticos de componente passam.
+- [x] O MVP funciona sem IA.
+- [x] Existe procedimento documentado para restaurar o banco; restauração real ainda não validada.
+
+**Evidência TDD:** o teste inicial ficou RED porque o módulo Dashboard não existia; depois da implementação os testes de renderização de resumo/lista/tarefas/atalhos e erro independente passaram. Os dados do dashboard permanecem submetidos aos endpoints já protegidos por sessão e membership; nenhuma API ou migration nova foi necessária.
+
+**Verificações da fase:** backend: 45 testes passaram com `HOME_OS_TEST_SQLITE=true`; migrações SQLite aplicadas; `makemigrations --check --dry-run`, `check`, Ruff check e format check passaram. Frontend: 20 testes passaram; ESLint, Prettier check, build de produção e `npm audit` (0 vulnerabilidades) passaram. Durante validação final, arquivos da Fase 4 que estavam fora do Prettier foram formatados; a verificação completa passou depois da correção. A execução inicial de `migrate` sem flag tentou PostgreSQL e excedeu o timeout; a migração com SQLite explícito passou. PostgreSQL ao vivo, E2E/browser e restore real não foram executados; SQLite não comprova execução PostgreSQL.
 
 ### Fase 6 — IA opcional e preparação de produção
 

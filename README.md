@@ -1,6 +1,6 @@
 # Home OS
 
-Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1 (contas/residências), 2 (finanças básicas), 3 (compras/estoque) e 4 (tarefas e rotinas) estão implementadas; status e evidências de validação estão descritos no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
+Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1–5 (contas/residências, finanças, compras/estoque, tarefas e dashboard integrado) estão implementadas; status e evidências de validação estão descritos no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
 
 ## Executar com Docker Compose
 
@@ -106,6 +106,27 @@ Se houver resultados, a migration da constraint falhará intencionalmente. Avali
 Recorrências aceitam `daily`, `weekly` (`weekday`: 0–6, segunda a domingo) e `monthly` (`day`: 1–31), com horário local `time` (`HH:MM`). Ocorrências são para datas-calendário locais inclusivas, e horários são convertidos para UTC na persistência; DST altera o offset UTC, não o horário local solicitado. A chave única `(chore, due_at)`, `get_or_create` e transação com lock da residência tornam repetição idempotente; concorrência foi validada via constraint/SQLite, não sob PostgreSQL nesta execução. Período máximo: 367 dias. O serviço/API é explícito, sem cron ou notificações. Para gerar manualmente, faça POST autenticado com CSRF para cada tarefa ativa e payload `{"start_date":"AAAA-MM-DD","end_date":"AAAA-MM-DD"}` (o atalho `"today"` usa a data corrente do fuso da residência). Isso cria somente datas daquela faixa e pode ser reexecutado com segurança.
 
 Migre com `python manage.py migrate`. A interface autenticada inclui criação, edição de título, ativação/desativação, listagem e conclusão, além da ação manual de gerar as ocorrências de hoje; datas são exibidas no fuso configurado para a residência.
+
+### Dashboard integrado e estabilização (Fase 5)
+
+O painel de cada residência consulta APIs existentes para gastos e orçamento restante do mês, saldos por membro, itens `needed` em listas ativas e ocorrências pendentes (com indicação de atraso). Cada seção carrega e apresenta falha/estado vazio independentemente das demais. Os atalhos abrem os módulos correspondentes. O layout reorganiza cartões em uma coluna em telas estreitas.
+
+### Backup e restauração PostgreSQL
+
+Execute em ambiente autorizado, usando o usuário/container PostgreSQL configurado no Compose. O formato custom do `pg_dump` permite restauração seletiva e compressão. Armazene o backup fora do repositório, com acesso restrito e criptografia no destino. Não coloque senhas na linha de comando; use o mecanismo de credenciais aprovado no ambiente (por exemplo `.pgpass` com permissões restritas ou `PGPASSWORD` injetada pelo secret manager). Exemplos para serviço Compose `db`:
+
+```sh
+# Backup consistente; substitua nomes pelo ambiente configurado.
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > home-os-$(date +%Y%m%d-%H%M%S).dump
+
+# Validar a listagem de conteúdo sem restaurar.
+pg_restore --list home-os-YYYYMMDD-HHMMSS.dump
+
+# Restaurar APENAS em banco vazio/isolado previamente criado; nunca use --clean no banco ativo.
+pg_restore --exit-on-error --no-owner --no-privileges -h localhost -U "$POSTGRES_USER" -d "$RESTORE_DATABASE" home-os-YYYYMMDD-HHMMSS.dump
+```
+
+Configure o acesso `pg_dump`/`pg_restore` conforme o ambiente; o redirecionamento gera arquivo no host que executa o comando. Restaure primeiro em banco isolado, aplique validações funcionais e confira migrations antes de qualquer recuperação operacional. Estes comandos são documentados; restauração PostgreSQL real ainda precisa ser exercitada em ambiente isolado antes de produção. Os testes/migrations locais habilitados com `HOME_OS_TEST_SQLITE=true` usam SQLite e não substituem backup/restore nem comprovam compatibilidade operacional com PostgreSQL ao vivo.
 
 As rotas da API são versionadas em `/api/v1/`. Cookie de sessão é HttpOnly e SameSite=Lax; em produção os cookies Secure são habilitados quando `DEBUG=false`. Para desenvolvimento HTTP local, habilite `DJANGO_DEBUG=true` no ambiente do processo.
 

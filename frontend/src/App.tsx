@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import Finance from "./modules/finance/Finance";
 import Shopping from "./modules/shopping/Shopping";
 import Chores from "./modules/chores/Chores";
+import Dashboard from "./modules/dashboard/Dashboard";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type User = { id: number; email: string; name: string };
@@ -38,6 +39,18 @@ export default function App() {
   const [financeHousehold, setFinanceHousehold] = useState("");
   const [shoppingHousehold, setShoppingHousehold] = useState("");
   const [choresHousehold, setChoresHousehold] = useState("");
+  const [dashboardHousehold, setDashboardHousehold] = useState("");
+
+  useEffect(() => {
+    const openModule = (event: Event) => {
+      const moduleName = (event as CustomEvent<string>).detail;
+      if (moduleName === "finance") setFinanceHousehold(dashboardHousehold);
+      if (moduleName === "shopping") setShoppingHousehold(dashboardHousehold);
+      if (moduleName === "chores") setChoresHousehold(dashboardHousehold);
+    };
+    window.addEventListener("home-os:open", openModule);
+    return () => window.removeEventListener("home-os:open", openModule);
+  }, [dashboardHousehold]);
 
   async function refresh() {
     try {
@@ -272,6 +285,19 @@ export default function App() {
             role={houses.find((house) => house.id === financeHousehold)!.role}
           />
         </section>
+      ) : dashboardHousehold &&
+        houses.some((house) => house.id === dashboardHousehold) ? (
+        <section>
+          <button className="quiet" onClick={() => setDashboardHousehold("")}>
+            Voltar às residências
+          </button>
+          <Dashboard
+            householdId={dashboardHousehold}
+            householdName={
+              houses.find((house) => house.id === dashboardHousehold)!.name
+            }
+          />
+        </section>
       ) : (
         <section>
           <p className="eyebrow">OLÁ, {user.name.toLocaleUpperCase("pt-BR")}</p>
@@ -289,6 +315,9 @@ export default function App() {
                 <article className="house-card" key={house.id}>
                   <div>
                     <h3>{house.name}</h3>
+                    <button onClick={() => setDashboardHousehold(house.id)}>
+                      Abrir painel da residência
+                    </button>
                     <button onClick={() => setFinanceHousehold(house.id)}>
                       Abrir finanças
                     </button>
