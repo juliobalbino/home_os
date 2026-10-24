@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import Finance from "./modules/finance/Finance";
 import Shopping from "./modules/shopping/Shopping";
+import Chores from "./modules/chores/Chores";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type User = { id: number; email: string; name: string };
-type Household = { id: string; name: string; role: string };
+type Household = { id: string; name: string; role: string; timezone?: string };
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API}${url}`, {
@@ -36,6 +37,7 @@ export default function App() {
   const [acceptToken, setAcceptToken] = useState("");
   const [financeHousehold, setFinanceHousehold] = useState("");
   const [shoppingHousehold, setShoppingHousehold] = useState("");
+  const [choresHousehold, setChoresHousehold] = useState("");
 
   async function refresh() {
     try {
@@ -245,6 +247,20 @@ export default function App() {
             role={houses.find((house) => house.id === shoppingHousehold)!.role}
           />
         </section>
+      ) : choresHousehold &&
+        houses.some((house) => house.id === choresHousehold) ? (
+        <section>
+          <button className="quiet" onClick={() => setChoresHousehold("")}>
+            Voltar ao início
+          </button>
+          <Chores
+            householdId={choresHousehold}
+            role={houses.find((house) => house.id === choresHousehold)!.role}
+            timezone={
+              houses.find((house) => house.id === choresHousehold)!.timezone
+            }
+          />
+        </section>
       ) : financeHousehold &&
         houses.some((house) => house.id === financeHousehold) ? (
         <section>
@@ -278,6 +294,9 @@ export default function App() {
                     </button>
                     <button onClick={() => setShoppingHousehold(house.id)}>
                       Abrir compras e estoque
+                    </button>
+                    <button onClick={() => setChoresHousehold(house.id)}>
+                      Abrir tarefas e rotinas
                     </button>
                     <p>
                       Seu papel:{" "}
