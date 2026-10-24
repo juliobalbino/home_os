@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import Finance from "./modules/finance/Finance";
+import Shopping from "./modules/shopping/Shopping";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type User = { id: number; email: string; name: string };
@@ -34,6 +35,7 @@ export default function App() {
   const [inviteToken, setInviteToken] = useState("");
   const [acceptToken, setAcceptToken] = useState("");
   const [financeHousehold, setFinanceHousehold] = useState("");
+  const [shoppingHousehold, setShoppingHousehold] = useState("");
 
   async function refresh() {
     try {
@@ -232,6 +234,17 @@ export default function App() {
             {mode === "login" ? "Criar uma conta" : "Já tenho uma conta"}
           </button>
         </section>
+      ) : shoppingHousehold &&
+        houses.some((house) => house.id === shoppingHousehold) ? (
+        <section>
+          <button className="quiet" onClick={() => setShoppingHousehold("")}>
+            Voltar ao início
+          </button>
+          <Shopping
+            householdId={shoppingHousehold}
+            role={houses.find((house) => house.id === shoppingHousehold)!.role}
+          />
+        </section>
       ) : financeHousehold &&
         houses.some((house) => house.id === financeHousehold) ? (
         <section>
@@ -262,6 +275,9 @@ export default function App() {
                     <h3>{house.name}</h3>
                     <button onClick={() => setFinanceHousehold(house.id)}>
                       Abrir finanças
+                    </button>
+                    <button onClick={() => setShoppingHousehold(house.id)}>
+                      Abrir compras e estoque
                     </button>
                     <p>
                       Seu papel:{" "}

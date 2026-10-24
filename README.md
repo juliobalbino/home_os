@@ -1,6 +1,6 @@
 # Home OS
 
-Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1 (contas/residências) e 2 (finanças básicas) estão implementadas e verificadas conforme o [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
+Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1 (contas/residências) e 2 (finanças básicas) estão implementadas e verificadas; a Fase 3 (compras/estoque) está implementada parcialmente, com validação e evidências descritas no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
 
 ## Executar com Docker Compose
 
@@ -77,6 +77,14 @@ Pagamentos são a fonte única para saber quem pagou; não existe atribuição d
 
 Validação financeira local com SQLite de teste: `HOME_OS_TEST_SQLITE=true python manage.py test apps.finance` (PowerShell: `$env:HOME_OS_TEST_SQLITE='true'; python manage.py test apps.finance`). A aplicação permanece configurada para PostgreSQL por padrão; esses testes não demonstram execução real em PostgreSQL.
 
+### Compras e estoque (Fase 3)
+
+As APIs de catálogo, aliases, observações de preço manuais, listas compartilhadas, itens livres/de produto, compras e consulta de estoque estão sob `/api/v1/households/{id}/...`; a confirmação de compra exige `Idempotency-Key`. Envie `quantity` como decimal string e `unit_price_minor` como inteiro positivo; o backend calcula `line_total_minor` por Decimal com `ROUND_HALF_UP` ao centavo e rejeita um total de linha enviado que não coincida. Cada item pode informar `shopping_list_item_id` para vincular apenas item da lista ainda `needed` e com o mesmo produto; vínculo inválido ou indisponível retorna 409 e reverte a transação. Itens livres não são convertidos automaticamente em produtos. Itens usam `Decimal` serializado como string, até quatro casas decimais. As unidades são identificadores opacos e devem coincidir exatamente (`kg` não converte para `g`; `l` não converte para `ml`). Uma compra validada cria Purchase/PurchaseItem, PriceObservation de origem `purchase`, eventos/saldo, uma Expense em `Compras`, ExpenseSplits iguais para memberships ativos, um Payment integral pelo comprador atual e um evento minimizado `purchase.confirmed`, dentro de uma transação. O resumo financeiro permanece baseado em Expense.
+
+Rotas adicionais: `POST /products/{id}/aliases`, `POST /households/{id}/price-observations`, `POST /shopping-lists/{id}/items`, `PATCH /shopping-items/{id}`, `GET /households/{id}/inventory` e `POST /inventory/{id}/events`. PATCH aceita status `purchased`/`skipped`; a interface expõe essas ações. Eventos manuais não aceitam `purchase`; consumo/perda requerem delta negativo; ajuste/correção exigem justificativa. Valores de preço manual são inteiros positivos e bool/float são rejeitados; quantidades e deltas aceitam apenas int/Decimal/string (não bool/float), são finitos e têm no máximo quatro casas; notas limitam-se a 240 caracteres. Campos textuais e prioridade da lista são validados antes de persistir. Saldo negativo é rejeitado sob lock transacional. Escritas respeitam membership e bloqueiam viewer. Produto e texto livre são mutuamente exclusivos e validados também por constraint no banco. Na confirmação de compra, a unidade da linha acompanha o produto selecionado no catálogo.
+
+Verificações finais desta revisão: backend completo (45 testes) e `apps.shopping` (12 testes) passaram em SQLite; `check`, `makemigrations --check --dry-run` e aplicação de `migrate --noinput` passaram. Ruff check/format passaram. Frontend completo: 15 testes passaram; ESLint, Prettier check, build de produção e `npm audit` (0 vulnerabilidades) passaram. RED/GREEN observado: item de lista já comprado reproduziu `DoesNotExist`; float em evento de estoque e unidade de produto desatualizada falharam nos testes antes da correção; os novos testes passaram após implementação. O retry com a mesma chave continua coberto como 200. Concorrência PostgreSQL e E2E/browser não foram executados.
+
 Antes de aplicar a migration que adiciona a unicidade, diagnostique possíveis duplicatas legadas sem alterá-las automaticamente:
 
 ```sql
@@ -113,4 +121,4 @@ Para rodar o frontend fora do Compose, inicie a API local e configure `VITE_API_
 - `frontend/src/`: interface, estilos e testes.
 - `docker-compose.yml`: frontend, API e banco para desenvolvimento.
 
-Listas/compras, estoque, tarefas e IA permanecem fora das Fases 1 e 2.
+Tarefas e IA permanecem fora das Fases 1–3.

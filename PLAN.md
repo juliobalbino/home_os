@@ -602,22 +602,28 @@ Critérios de aceite:
 **Estimativa:** 4–6 dias.
 
 Tarefas:
-- [ ] Implementar catálogo de produtos e aliases básicos.
-- [ ] Implementar listas compartilhadas e itens livres.
-- [ ] Implementar observações de preços.
-- [ ] Implementar registro de compra e itens.
-- [ ] Implementar movimentos e saldo de estoque.
-- [ ] Integrar compra com despesa financeira sem duplicar valores.
-- [ ] Implementar idempotência para confirmação de compra.
-- [ ] Criar interface de lista, catálogo, compra e estoque.
-- [ ] Adicionar suporte a upload somente se o fluxo principal já estiver estável.
+- [x] Implementar catálogo de produtos e aliases básicos.
+- [x] Implementar listas compartilhadas e itens livres.
+- [x] Implementar observações de preços manuais e de compra.
+- [x] Implementar registro de compra e itens.
+- [x] Implementar movimentos e saldo de estoque.
+- [x] Integrar compra com despesa financeira sem duplicar valores.
+- [x] Implementar idempotência para confirmação de compra (mesmo payload reaproveita; payload divergente retorna 409).
+- [x] Criar interface integrada de lista, catálogo, confirmação manual de compra e estoque; contempla viewer read-only e estados de carregamento/vazio/erro/sucesso.
+- [ ] Upload/OCR: fora do escopo aprovado desta fase; não implementado.
 
 Critérios de aceite:
-- [ ] Os dois moradores veem a lista compartilhada.
-- [ ] Confirmar uma compra atualiza financeiro e estoque uma única vez.
-- [ ] O saldo pode ser conciliado com o histórico de movimentos.
-- [ ] Preço observado e preço efetivamente pago são diferenciados.
-- [ ] Cadastro manual funciona sem integração de IA.
+- [ ] Os dois moradores veem a lista compartilhada (endpoints compartilhados implementados; teste com dois usuários pendente).
+- [x] Confirmar uma compra atualiza financeiro e estoque uma única vez (teste API SQLite: retry sem duplicar Expense/Payment/estoque).
+- [ ] O saldo pode ser conciliado com o histórico de movimentos (ledger e saldo implementados; teste abrangente de conciliação pendente).
+- [x] Preço observado e preço efetivamente pago são diferenciados por `PriceObservation.source`.
+- [x] Cadastro manual funciona sem integração de IA.
+
+**Convenção de unidades:** unidades são strings opacas, comparadas exatamente dentro do produto; sem conversão entre `g`/`kg`, `ml`/`l` ou unidades equivalentes. Quantidades são `Decimal` persistidas em até quatro casas decimais e transmitidas em JSON como strings. Movimentos manuais de ajuste/correção exigem justificativa; saldo negativo é bloqueado.
+
+**Evidência TDD registrada:** os novos testes foram executados antes das alterações de produção: o retry com nova chave para item já comprado reproduziu `DoesNotExist`; o evento de inventário aceitou float; a validação de limites/tipos textuais falhou; e o teste de troca de produto recebeu unidade antiga. Após as correções, as regressões passaram. O retry com a mesma chave permanece coberto como HTTP 200. A auditoria minimizada de compra também está coberta. Idempotência concorrente real não foi exercitada sob PostgreSQL nesta máquina.
+
+**Verificações finais desta revisão:** backend completo: 45 testes; `apps.shopping`: 12 testes; `check`, `makemigrations --check --dry-run` e aplicação de `migrate --noinput` em SQLite passaram. Frontend completo: 15 testes; ESLint, Prettier check, build de produção e `npm audit` (0 vulnerabilidades) passaram. Ruff check e format check passaram. PostgreSQL ao vivo, concorrência PostgreSQL e E2E/browser não foram executados. O teste SQLite valida fluxos transacionais sem simular concorrência entre conexões PostgreSQL; a implementação serializa pelo lock da residência em bancos que suportam `SELECT FOR UPDATE`, com constraint única como guarda final.
 
 ### Fase 4 — Tarefas e rotinas
 
