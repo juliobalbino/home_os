@@ -1,6 +1,6 @@
 # Home OS
 
-Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1 (contas/residências) e 2 (finanças básicas) estão implementadas e verificadas; a Fase 3 (compras/estoque) está implementada parcialmente, com validação e evidências descritas no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
+Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1 (contas/residências), 2 (finanças básicas), 3 (compras/estoque) e 4 (tarefas e rotinas) estão implementadas; status e evidências de validação estão descritos no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
 
 ## Executar com Docker Compose
 
@@ -99,6 +99,14 @@ HAVING COUNT(*) > 1;
 
 Se houver resultados, a migration da constraint falhará intencionalmente. Avalie e resolva cada caso explicitamente, preservando o histórico; nenhum membership será apagado automaticamente.
 
+### Tarefas e rotinas (Fase 4)
+
+`GET/POST /api/v1/households/{id}/chores`, `PATCH /api/v1/chores/{id}`, `GET /api/v1/households/{id}/chore-occurrences`, `POST /api/v1/chores/{id}/generate-occurrences` e `POST /api/v1/chore-occurrences/{id}/complete` implementam tarefas, responsáveis por membership ativo, estado ativo/inativo e ocorrência com histórico de conclusão. Somente membership ativo acessa os dados; viewers leem, mas não alteram nem geram ocorrências.
+
+Recorrências aceitam `daily`, `weekly` (`weekday`: 0–6, segunda a domingo) e `monthly` (`day`: 1–31), com horário local `time` (`HH:MM`). Ocorrências são para datas-calendário locais inclusivas, e horários são convertidos para UTC na persistência; DST altera o offset UTC, não o horário local solicitado. A chave única `(chore, due_at)`, `get_or_create` e transação com lock da residência tornam repetição idempotente; concorrência foi validada via constraint/SQLite, não sob PostgreSQL nesta execução. Período máximo: 367 dias. O serviço/API é explícito, sem cron ou notificações. Para gerar manualmente, faça POST autenticado com CSRF para cada tarefa ativa e payload `{"start_date":"AAAA-MM-DD","end_date":"AAAA-MM-DD"}` (o atalho `"today"` usa a data corrente do fuso da residência). Isso cria somente datas daquela faixa e pode ser reexecutado com segurança.
+
+Migre com `python manage.py migrate`. A interface autenticada inclui criação, edição de título, ativação/desativação, listagem e conclusão, além da ação manual de gerar as ocorrências de hoje; datas são exibidas no fuso configurado para a residência.
+
 As rotas da API são versionadas em `/api/v1/`. Cookie de sessão é HttpOnly e SameSite=Lax; em produção os cookies Secure são habilitados quando `DEBUG=false`. Para desenvolvimento HTTP local, habilite `DJANGO_DEBUG=true` no ambiente do processo.
 
 Frontend, a partir de `frontend/`:
@@ -121,4 +129,4 @@ Para rodar o frontend fora do Compose, inicie a API local e configure `VITE_API_
 - `frontend/src/`: interface, estilos e testes.
 - `docker-compose.yml`: frontend, API e banco para desenvolvimento.
 
-Tarefas e IA permanecem fora das Fases 1–3.
+IA permanece fora das Fases 1–4.

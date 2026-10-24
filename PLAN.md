@@ -630,19 +630,25 @@ Critérios de aceite:
 **Estimativa:** 2–4 dias.
 
 Tarefas:
-- [ ] Implementar tarefas, categorias e responsáveis.
-- [ ] Implementar prazo e status.
-- [ ] Implementar conclusão e histórico.
-- [ ] Implementar recorrências básicas com timezone da residência.
-- [ ] Evitar ocorrências duplicadas.
-- [ ] Criar interface de tarefas pendentes e concluídas.
-- [ ] Criar testes para mudança de horário e recorrência.
+- [x] Implementar tarefas, categorias e responsáveis.
+- [x] Implementar prazo e status.
+- [x] Implementar conclusão e histórico.
+- [x] Implementar recorrências básicas com timezone da residência.
+- [x] Evitar ocorrências duplicadas.
+- [x] Criar interface de tarefas pendentes e concluídas.
+- [x] Criar testes para mudança de horário e recorrência.
 
 Critérios de aceite:
-- [ ] Cada morador vê as tarefas atribuídas e compartilhadas conforme as permissões.
-- [ ] Concluir tarefa preserva o histórico.
-- [ ] Reprocessar a geração de recorrências não duplica ocorrências.
-- [ ] Datas são exibidas no fuso horário configurado.
+- [x] Cada morador com membership ativo vê tarefas/ocorrências; viewers são somente leitura.
+- [x] Concluir tarefa preserva registros em `ChoreCompletion`.
+- [x] Reprocessar a geração de recorrências não duplica ocorrências.
+- [x] Datas são geradas no timezone configurado e persistidas como instantes UTC.
+
+**Convenção de recorrência:** a faixa de geração contém datas locais inclusivas da residência (limite de 367 dias). `daily`, `weekly` (`weekday` 0–6) e `monthly` (`day` 1–31) aceitam horário local `HH:MM`. Dias de mês inexistentes são ignorados. A conversão zoneinfo usa regras DST vigentes para cada data; o horário de parede local é mantido e o instante UTC muda conforme o offset. Ocorrência pontual usa o instante com timezone fornecido na tarefa. Geração é acionada explicitamente por endpoint/serviço; não foi adicionada infraestrutura de agenda.
+
+**Progresso verificado:** app `chores`, migration, API versionada, autorização por household, validação, auditoria de mutações e UI autenticada integrados. Testes TDD focados cobrem geração idempotente/DST (troca de offset), viewer, validação, histórico e isolamento. O serviço serializa por lock da residência em bancos com suporte a `SELECT FOR UPDATE` e constraint única como garantia final; concorrência PostgreSQL real não foi exercitada.
+
+**Verificações finais desta execução:** backend completo: 45 testes passaram em SQLite; testes focados `apps.chores`: 3 passaram; migrations aplicadas com `migrate --noinput`; `check`, `makemigrations --check --dry-run`, Ruff check e format check passaram. Frontend completo: 17 testes passaram; ESLint e build de produção passaram; `npm audit` reportou 0 vulnerabilidades. `npm run format:check` ainda aponta somente os arquivos preexistentes `src/modules/shopping/Shopping.tsx` e `Shopping.test.tsx`; os arquivos desta fase estão formatados. `git diff --check` passou. Docker Desktop Linux daemon indisponível, portanto Compose, PostgreSQL real e browser E2E não foram executados; concorrência PostgreSQL não foi exercitada.
 
 ### Fase 5 — Dashboard integrado e estabilização do MVP
 
