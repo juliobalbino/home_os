@@ -1,6 +1,6 @@
 # Home OS
 
-Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1–5 (contas/residências, finanças, compras/estoque, tarefas e dashboard integrado) estão implementadas; status e evidências de validação estão descritos no [plano](PLAN.md). A integração de IA permanece pendente e não bloqueia o MVP.
+Monólito modular com API Django/DRF, interface React/TypeScript e PostgreSQL. As Fases 1–5 estão implementadas; a Fase 6 inclui integração opcional de Sign in with ChatGPT para candidatos de produtos, ainda sem verificação ao vivo. Consulte [PLAN.md](PLAN.md) para evidências e limites. O projeto é distribuído sob a licença MIT ([LICENSE](LICENSE)).
 
 ## Executar com Docker Compose
 
@@ -151,3 +151,37 @@ Para rodar o frontend fora do Compose, inicie a API local e configure `VITE_API_
 - `docker-compose.yml`: frontend, API e banco para desenvolvimento.
 
 IA permanece fora das Fases 1–4.
+
+### Assistente opcional e Sign in with ChatGPT (Fase 6)
+
+A integração usa o fluxo oficial open-source de uso do plano ChatGPT (sem API key nem client secret). Cada morador autoriza sua própria conta; viewer pode consultar o estado, mas não enviar solicitações. A ausência de configuração mantém o recurso desligado e não afeta os demais módulos.
+
+**Configuração fail-closed:** defina `ASSISTANT_ENABLED=true` e `ASSISTANT_ENCRYPTION_KEY` no ambiente do processo somente após decidir habilitar o recurso. A chave deve ser Fernet válida: URL-safe Base64 dos 32 bytes de chave; gere-a com `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`; configure-a por secret manager/variável de ambiente no backend e no host de execução. Não a coloque em código, `.env.example`, logs ou no mesmo canal/destino da cópia de credenciais. O status informa `disabled` ou `missing_or_invalid_encryption_key` até os requisitos serem satisfeitos. Testes usam SQLite por `HOME_OS_TEST_SQLITE=true` e `override_settings` com chave Fernet sintética definida nos próprios testes; nenhum segredo externo ou conta real é necessário. Nunca use uma conta real nem faça chamada ao vivo na suíte.
+
+**OAuth local:** após instalar dependências e migrar, execute no backend com a conta Home OS autenticada operacionalmente por `--user-id`:
+
+```sh
+python manage.py assistant_oauth --user-id 1 --host-id urn:uuid:UUID-PERSISTIDO
+```
+
+O comando abre o navegador e escuta somente em `http://127.0.0.1:1455/auth/callback`, usa state/nonce/PKCE, dynamic client registration (`dynamic_agent_client`) e valida ID token/JWKS e scope. Mantenha o host ID opaco e estável; use `--client-id oaiapp_...` para reautorizar um registro existente e acrescente `--consent` somente para repetir consentimento após recusa/ausência de scope. Credenciais ficam cifradas no banco e em um arquivo bundle cifrado indicado por `--output`; o arquivo contém dados sensíveis cifrados, deve ter acesso restrito e não pode ser versionado. O callback nunca é uma rota hospedada.
+
+**VM self-hosted:** gere e persista um `ext_agent_host_id` próprio da VM antes de importar (UUIDv4 `urn:uuid:...` aceito). Faça OAuth no computador local, depois transfira o bundle cifrado para a VM por canal protegido, por exemplo `scp` sobre SSH; não transfira a chave Fernet junto do arquivo. Configure o mesmo segredo no secret manager da VM e importe para o usuário Home OS correspondente:
+
+```sh
+python manage.py assistant_oauth --import-file /caminho/protegido/chatgpt-credentials.enc --user-id 1 --host-id urn:uuid:UUID-PERSISTIDO-DA-VM
+```
+
+A importação re-cifra as credenciais no banco da VM. Preserve o host ID da VM, não copie o ID do computador local como ID da VM. A VM passa a gerir renovações; a limitação atual do fluxo é que atribuição de uso específica ao host e revogação para sessão transferida não estão disponíveis no protocolo. A integração permanece inativa enquanto o ambiente estiver desligado/mal configurado ou sem scope. Revogue localmente com `python manage.py assistant_oauth --revoke-client-id oaiapp_... --user-id 1`; o comando consulta o revocation endpoint oficial, tenta novamente com backoff limitado em falha de rede/5xx e, se a revogação remota não for confirmada, apaga os tokens locais e instrui a desconexão em ChatGPT Settings.
+
+**Ativar no ambiente de testes:** `docker-compose.test.yml` define `ASSISTANT_ENABLED=true` por padrão para o test VM, mas o recurso permanece fail-closed enquanto `ASSISTANT_ENCRYPTION_KEY` estiver ausente ou inválida. Gere uma chave Fernet no computador local confiável e adicione `ASSISTANT_ENABLED=true` e `ASSISTANT_ENCRYPTION_KEY=<chave>` ao `.env` persistente do test VM usando um método local seguro (por exemplo, editor por SSH com host verificado). Configure a mesma chave no ambiente do backend local antes de executar o comando OAuth de exportação; o comando local e a VM precisam da mesma chave para exportar/importar o bundle. Transfira somente o bundle cifrado por canal protegido. Não envie nem faça commit da chave e não a inclua em `.env.example`.
+
+`POST /api/v1/households/{id}/assistant` aceita `mode: "text"` ou `mode: "label"`, texto até 4000 caracteres e imagem JPEG/PNG/WebP até 5 MiB. Aplica limite local de 10 solicitações por usuário/residência/hora; erros do provedor são curtos e não incluem credenciais. Respostas/candidatos não são persistidos; candidatos mostram que confirmação explícita é necessária. O Responses request usa catálogo de modelos da conta e somente campos aceitos nesta integração, sempre `store:false` e `stream:true`; sem ferramentas ou mutações automáticas. Confira limites compartilhados do plano em [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage).
+
+Referências oficiais: [open-source token sharing](https://developers.openai.com/siwc/token-sharing-open-source/), [sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in/), [profiles and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions/), [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference/), [self-hosted VMs](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms/), [errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery/) e [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations/).
+
+O fluxo e as requisições OpenAI não foram exercitados ao vivo; não se afirma que uma conta ChatGPT esteja conectada nem que uma solicitação de plano tenha sido concluída. Elegibilidade, comportamento do provedor e consentimento dependem de OAuth real pelo usuário.
+
+**Verificações desta implementação:** `HOME_OS_TEST_SQLITE=true python manage.py test` (**66 testes backend**), `migrate --noinput`, `makemigrations --check --dry-run`, `check`, Ruff check/format; frontend `npm test` (**22 testes**), ESLint, Prettier check, build de produção e `npm audit` (0 vulnerabilidades). `docker compose config --quiet` também passou. Os testes OpenAI são simulados; não foram feitos OAuth/requisições ao vivo, PostgreSQL real, Compose com serviços iniciados, VM ou deploy. Os testes usam SQLite explicitamente; isso não comprova comportamento concorrente PostgreSQL. Testes de `response.failed`, `response.incomplete` e stream interrompido foram observados RED antes da correção e passaram GREEN depois.
+
+**TDD RED/GREEN documentado:** teste de readiness inicialmente falhou pela ausência de `apps.assistant.configuration`, depois passou com fail-closed; teste de cifragem iniciou falhando pela ausência de `ChatGPTConnection`, depois passou; teste de schema estruturado iniciou falhando sem `parse_candidate_output`, depois passou com validação; teste React iniciou falhando porque o componente ainda não existia e passou após implementação (incluindo teste viewer read-only); teste de modo texto iniciou falhando por argumento `mode` não suportado e passou quando foi implementado. O teste adicional da readiness com chave Fernet inválida também foi observado RED antes da validação e GREEN depois dela. Os testes de contrato Responses verificam `store=false` e `stream=true` com catálogo e stream simulados.

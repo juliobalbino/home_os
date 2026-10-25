@@ -679,24 +679,29 @@ Critérios de aceite:
 **Estimativa:** 3–6 dias de implementação após validar o conector; pode haver espera por elegibilidade/acesso.
 
 Tarefas:
-- [ ] Validar o método de autorização permitido para este cenário.
-- [ ] Implementar `AIProvider` e uma implementação concreta somente se elegível.
-- [ ] Garantir que cada morador autorize a própria conexão, se necessário.
-- [ ] Implementar interpretação de etiqueta com schema estruturado.
-- [ ] Mostrar os dados extraídos para confirmação antes de persistir.
-- [ ] Implementar limites, timeout, tratamento de falhas e logs mínimos.
-- [ ] Implementar propostas de ação e aprovação explícita.
-- [ ] Testar falhas de provedor e respostas inválidas.
-- [ ] Preparar configuração de VPS, Traefik, HTTPS e backups externos.
+- [x] Validar o método com a documentação oficial Sign in with ChatGPT para OSS; OAuth é executado no computador local via loopback, não em callback hospedado.
+- [x] Implementar cliente Responses API concreto condicionado a habilitação explícita e chave Fernet válida.
+- [x] Manter connection individual por usuário Home OS, client ID emitido e subject validado; viewers não enviam pedidos.
+- [x] Implementar OAuth local com dynamic client registration, redirect exato 127.0.0.1, state, nonce, PKCE, JWKS/claims e validação do scope de uso do plano.
+- [x] Cifrar tokens em repouso; implementar refresh/rotação, estado de reautorização e comando de revogação.
+- [x] Implementar transferência cifrada para self-hosted VM via bundle e canal externo protegido; cada host mantém ID estável próprio.
+- [x] Implementar candidatos de etiqueta estruturados e validação antes de resposta; UI deixa explícito que é necessária confirmação e não persiste alterações.
+- [x] Aplicar limites de texto/imagem, timeout de rede, limite local de 10 solicitações por usuário/residência/hora, instruções separadas do conteúdo não confiável e erros concisos.
+- [x] Cobrir fail-closed, autorização/escopo/PKCE/JWT, cifra, isolamento, viewer, validação e contrato Responses com testes mockados.
+- [ ] Deploy VPS/Traefik/HTTPS/backups externos e verificação em produção não foram realizados nesta fase.
 
 Critérios de aceite:
-- [ ] A ausência da conexão de IA não afeta os módulos essenciais.
-- [ ] Tokens não são compartilhados entre usuários.
-- [ ] Nenhuma ação financeira é executada a partir de saída não validada.
-- [ ] Dados extraídos de imagem exigem confirmação.
-- [ ] A integração cumpre as regras do fluxo oficial utilizado.
+- [x] A ausência da conexão de IA não afeta os módulos essenciais; recurso permanece desligado por padrão.
+- [x] Tokens são isolados por usuário/registro e cifrados; não são enviados ao browser.
+- [x] Saída não altera banco financeiro, compras ou estoque; candidatos requerem confirmação externa e não há persistência automática.
+- [x] Dados de etiqueta retornam como candidatos explícitos, sem gravação automática.
+- [x] Implementação segue o fluxo OSS documentado para OAuth local, VM self-hosted e Responses com `store:false`/`stream:true`.
 
 **Estimativa agregada:** aproximadamente 16–27 dias úteis para o MVP e estabilização, mais o tempo variável da integração de IA e da implantação. As estimativas são orientativas, não garantias.
+
+**Evidência TDD da Fase 6:** readiness RED pela ausência do módulo; GREEN após fail-closed (incluindo chave ausente/inválida). O armazenamento RED pela ausência do modelo; GREEN após teste de cifragem. O parser de candidatos RED pela ausência do schema; GREEN após validação. O teste React RED pela ausência do componente; GREEN depois da interface e ajuste de isolamento/asserção. Evidência OAuth protocol/JWT, membership e Responses foi validada com transporte e chaves simuladas, sem chamada ao vivo. Contagens e comandos finais estão registradas no README e no relatório da execução.
+
+**Verificações desta execução:** suíte backend completa: 66 testes SQLite; migrations aplicadas, `makemigrations --check --dry-run`, `check`, Ruff check e format check. Frontend: 22 testes, ESLint, Prettier, build de produção e npm audit (0 vulnerabilidades); Compose config validado. Não houve OAuth de usuário real, importação real de bundle, chamada ChatGPT, confirmação de elegibilidade, deploy nem validação PostgreSQL/VM ao vivo. Portanto nenhuma conta/solicitação de plano é considerada ativa ou concluída. Testes adicionais cobrem `response.failed` para limites/inelegibilidade/credenciais inválidas, `response.incomplete` e stream interrompido; RED foi observado antes da correção e GREEN depois. Revogação de sessões importadas em outro host tem limitações descritas na documentação oficial; a UI fornece estado e uso, mas o OAuth é iniciado pelo comando local documentado.
 
 ---
 

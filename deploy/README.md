@@ -55,6 +55,17 @@ The `tests` branch uses `.github/workflows/tests-ci-cd.yml` and `docker-compose.
 
 Releases are retained under `${TEST_DEPLOY_PATH}/releases/<commit>` and deployed using Compose project `homeos-tests` with `docker-compose.test.yml`. This gives the test database its own named volume and the `tests-frontend` service a unique Pangolin alias (`homeos-tests-frontend`). It does not share the default `frontend` alias, avoiding production resource/DNS conflicts. Deploy runs migrations and checks `https://homeostests.juliobalbino.com.br/api/v1/health`. Keep the test path separate from production.
 
+### Enable the assistant on the test VM
+
+The test Compose file opts in with `ASSISTANT_ENABLED=true` by default, but the assistant stays fail-closed until a valid Fernet key is configured. Generate one on your trusted local computer and use a secure local method to enter it into the persistent test `.env` at `${TEST_DEPLOY_PATH}/.env` (for example, open that file in a terminal editor over an already verified SSH connection; do not put the key in a shell command, transcript, ticket, or repository). Add these lines without replacing the file's other settings:
+
+```dotenv
+ASSISTANT_ENABLED=true
+ASSISTANT_ENCRYPTION_KEY=<the Fernet key>
+```
+
+The OAuth local-export command must run with the **same** Fernet key as the test VM, because it encrypts the exported credential bundle. Set the key in the local backend process through a secure local environment/secret store before running `assistant_oauth`; transfer only the encrypted output bundle to the VM over a protected channel. Never send or commit the key, including alongside the bundle. If the key is absent or invalid, readiness remains `missing_or_invalid_encryption_key` and assistant requests remain unavailable. The key must be preserved with the persistent VM environment so stored credentials remain decryptable.
+
 ## GitHub Actions CI/CD
 
 O workflow `.github/workflows/ci-cd.yml` executa CI em pull requests destinados a `main` e em pushes para `main`. O deploy ocorre exclusivamente após CI passar em um push para `main`; pull requests e outras branches nunca fazem deploy. O workflow empacota com `git archive` o conteúdo rastreado do commit verificado e o transfere por tar sobre SSH para um diretório limpo `/home/ubuntu/prj/releases/GITHUB_SHA`. Cada revisão fica isolada no seu próprio diretório. O `.env` ignorado existente em `/home/ubuntu/prj/.env` é preservado e ligado simbolicamente a cada release; o deploy falha se esse arquivo não existir. Nenhum pacote é instalado no VPS.

@@ -4,6 +4,7 @@ import Finance from "./modules/finance/Finance";
 import Shopping from "./modules/shopping/Shopping";
 import Chores from "./modules/chores/Chores";
 import Dashboard from "./modules/dashboard/Dashboard";
+import Assistant from "./modules/assistant/Assistant";
 
 const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type User = { id: number; email: string; name: string };
@@ -296,6 +297,10 @@ export default function App() {
             householdName={
               houses.find((house) => house.id === dashboardHousehold)!.name
             }
+          />
+          <Assistant
+            householdId={dashboardHousehold}
+            role={houses.find((house) => house.id === dashboardHousehold)!.role}
           />
         </section>
       ) : (
