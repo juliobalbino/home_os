@@ -1,5 +1,8 @@
 import json
+import os
+import tempfile
 from io import BytesIO, StringIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 
@@ -14,6 +17,65 @@ from apps.assistant.models import ChatGPTConnection
     ASSISTANT_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 )
 class AssistantCommandTests(TestCase):
+    @patch("apps.assistant.management.commands.assistant_oauth.webbrowser.open")
+    @patch("apps.assistant.management.commands.assistant_oauth.exchange_and_validate")
+    @patch("apps.assistant.management.commands.assistant_oauth.new_authorization")
+    @patch("apps.assistant.management.commands.assistant_oauth.HTTPServer")
+    @patch("apps.assistant.management.commands.assistant_oauth.get_user_model")
+    def test_authorize_without_user_id_exports_encrypted_bundle_only(
+        self, get_user_model, http_server, new_authorization, exchange, _open
+    ):
+        from cryptography.fernet import Fernet
+
+        from apps.assistant.management.commands import assistant_oauth
+
+        key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+        pending = {"state": "expected"}
+        new_authorization.return_value = ("https://example.test/authorize", pending)
+        exchange.return_value = (
+            {"sub": "account-subject"},
+            {"access_token": "private-access", "refresh_token": "private-refresh"},
+            ["chatgpt.tokens.use.direct"],
+        )
+        server = http_server.return_value
+
+        # Exercise the real command callback without opening a browser or network listener.
+        def serve_callback():
+            handler = http_server.call_args.args[1]
+            instance = object.__new__(handler)
+            instance.path = (
+                "/auth/callback?state=expected&code=test-code&client_id=oaiapp_test"
+            )
+            instance.send_response = MagicMock()
+            instance.send_header = MagicMock()
+            instance.end_headers = MagicMock()
+            instance.wfile = MagicMock()
+            handler.do_GET(instance)
+
+        server.handle_request.side_effect = serve_callback
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle_path = Path(directory) / "credentials.enc"
+            with patch.object(assistant_oauth, "assistant_is_ready", return_value=True):
+                call_command(
+                    "assistant_oauth",
+                    "--host-id",
+                    "urn:uuid:stable-host",
+                    "--output",
+                    str(bundle_path),
+                    stdout=output,
+                )
+            get_user_model.assert_not_called()
+            self.assertEqual(ChatGPTConnection.objects.count(), 0)
+            payload = json.loads(Fernet(key.encode()).decrypt(bundle_path.read_bytes()))
+            self.assertEqual(payload["client_id"], "oaiapp_test")
+            self.assertEqual(payload["account_subject"], "account-subject")
+            self.assertEqual(payload["credentials"]["refresh_token"], "private-refresh")
+            self.assertNotIn("private-access", output.getvalue())
+            self.assertNotIn("private-refresh", output.getvalue())
+            if os.name != "nt":
+                self.assertEqual(bundle_path.stat().st_mode & 0o777, 0o600)
+
     @patch("apps.assistant.management.commands.assistant_oauth.urllib.request.urlopen")
     @patch("apps.assistant.management.commands.assistant_oauth.time.sleep")
     def test_empty_http_200_revocation_succeeds_and_never_prints_refresh_token(

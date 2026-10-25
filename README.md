@@ -158,13 +158,13 @@ A integração usa o fluxo oficial open-source de uso do plano ChatGPT (sem API 
 
 **Configuração fail-closed:** defina `ASSISTANT_ENABLED=true` e `ASSISTANT_ENCRYPTION_KEY` no ambiente do processo somente após decidir habilitar o recurso. A chave deve ser Fernet válida: URL-safe Base64 dos 32 bytes de chave; gere-a com `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`; configure-a por secret manager/variável de ambiente no backend e no host de execução. Não a coloque em código, `.env.example`, logs ou no mesmo canal/destino da cópia de credenciais. O status informa `disabled` ou `missing_or_invalid_encryption_key` até os requisitos serem satisfeitos. Testes usam SQLite por `HOME_OS_TEST_SQLITE=true` e `override_settings` com chave Fernet sintética definida nos próprios testes; nenhum segredo externo ou conta real é necessário. Nunca use uma conta real nem faça chamada ao vivo na suíte.
 
-**OAuth local:** após instalar dependências e migrar, execute no backend com a conta Home OS autenticada operacionalmente por `--user-id`:
+**OAuth local:** após instalar dependências e configurar a chave Fernet, execute no backend. Para exportar credenciais para uma VM, não é necessário ter uma conta Home OS local:
 
 ```sh
-python manage.py assistant_oauth --user-id 1 --host-id urn:uuid:UUID-PERSISTIDO
+python manage.py assistant_oauth --host-id urn:uuid:UUID-PERSISTIDO
 ```
 
-O comando abre o navegador e escuta somente em `http://127.0.0.1:1455/auth/callback`, usa state/nonce/PKCE, dynamic client registration (`dynamic_agent_client`) e valida ID token/JWKS e scope. Mantenha o host ID opaco e estável; use `--client-id oaiapp_...` para reautorizar um registro existente e acrescente `--consent` somente para repetir consentimento após recusa/ausência de scope. Credenciais ficam cifradas no banco e em um arquivo bundle cifrado indicado por `--output`; o arquivo contém dados sensíveis cifrados, deve ter acesso restrito e não pode ser versionado. O callback nunca é uma rota hospedada.
+O comando abre o navegador e escuta somente em `http://127.0.0.1:1455/auth/callback`, usa state/nonce/PKCE, dynamic client registration (`dynamic_agent_client`) e valida ID token/JWKS e scope. Mantenha o host ID opaco e estável; use `--client-id oaiapp_...` para reautorizar um registro existente e acrescente `--consent` somente para repetir consentimento após recusa/ausência de scope. Sem `--user-id`, grava somente o bundle cifrado; com `--user-id`, também associa credenciais à conta Home OS local. Para exportação, tokens ficam somente no bundle cifrado indicado por `--output`; o arquivo contém dados sensíveis cifrados, deve ter acesso restrito e não pode ser versionado. O callback nunca é uma rota hospedada.
 
 **VM self-hosted:** gere e persista um `ext_agent_host_id` próprio da VM antes de importar (UUIDv4 `urn:uuid:...` aceito). Faça OAuth no computador local, depois transfira o bundle cifrado para a VM por canal protegido, por exemplo `scp` sobre SSH; não transfira a chave Fernet junto do arquivo. Configure o mesmo segredo no secret manager da VM e importe para o usuário Home OS correspondente:
 

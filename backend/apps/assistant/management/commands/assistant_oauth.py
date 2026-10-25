@@ -48,16 +48,13 @@ class Command(BaseCommand):
             self.authorize(options)
 
     def authorize(self, options):
-        if not options["user_id"]:
-            raise CommandError(
-                "--user-id is required to associate credentials with a Home OS user."
-            )
         try:
             credential_cipher()
-            get_user_model().objects.get(pk=options["user_id"])
+            if options["user_id"]:
+                get_user_model().objects.get(pk=options["user_id"])
         except Exception as exc:
             raise CommandError(
-                "A valid ASSISTANT_ENCRYPTION_KEY and existing Home OS user are required before OAuth."
+                "A valid ASSISTANT_ENCRYPTION_KEY and, when supplied, an existing Home OS user are required before OAuth."
             ) from exc
         if not options["host_id"]:
             raise CommandError(
@@ -128,20 +125,21 @@ class Command(BaseCommand):
                 "OAuth exchange or identity validation failed; start a fresh sign-in."
             ) from exc
         token["expires_at"] = time.time() + int(token.get("expires_in", 0))
-        connection, _ = ChatGPTConnection.objects.get_or_create(
-            user_id=options["user_id"],
-            client_id=client_id,
-            account_subject=claims["sub"],
-        )
-        connection.host_id = options["host_id"]
-        connection.scopes = sorted(scopes)
-        connection.status = (
-            ("connected" if assistant_is_ready() else "pending_configuration")
-            if "chatgpt.tokens.use.direct" in scopes
-            else "consent_required"
-        )
-        connection.set_credentials(token)
-        connection.save()
+        if options["user_id"]:
+            connection, _ = ChatGPTConnection.objects.get_or_create(
+                user_id=options["user_id"],
+                client_id=client_id,
+                account_subject=claims["sub"],
+            )
+            connection.host_id = options["host_id"]
+            connection.scopes = sorted(scopes)
+            connection.status = (
+                ("connected" if assistant_is_ready() else "pending_configuration")
+                if "chatgpt.tokens.use.direct" in scopes
+                else "consent_required"
+            )
+            connection.set_credentials(token)
+            connection.save()
         bundle = {
             "client_id": client_id,
             "account_subject": claims["sub"],
