@@ -419,11 +419,6 @@ export default function App() {
               <button disabled={busy || !acceptToken.trim()}>Aceitar</button>
             </div>
           </form>
-          <nav className="main-nav" aria-label="Navegação principal">
-            <span aria-current="page">Início</span>
-            <span>Residências</span>
-            <span>Membros</span>
-          </nav>
         </section>
       )}
       {message && (

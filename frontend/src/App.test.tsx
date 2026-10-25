@@ -49,9 +49,7 @@ describe("authenticated account interface", () => {
     });
     render(<App />);
     expect(await screen.findByText("Casa")).toBeInTheDocument();
-    expect(
-      screen.getByRole("navigation", { name: "Navegação principal" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Criar residência")).not.toBeInTheDocument();
     expect(
       screen.getByText(/já participa de uma residência/i),
