@@ -31,7 +31,12 @@ INSTALLED_APPS = [
     "apps.shopping",
     "apps.inventory",
     "apps.chores",
+    "apps.assistant",
 ]
+ASSISTANT_ENABLED = os.getenv("ASSISTANT_ENABLED", "false").lower() == "true"
+ASSISTANT_ENCRYPTION_KEY = os.getenv("ASSISTANT_ENCRYPTION_KEY", "")
+ASSISTANT_MODEL = os.getenv("ASSISTANT_MODEL", "")
+DATA_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

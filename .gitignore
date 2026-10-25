@@ -1,4 +1,6 @@
 .env
+chatgpt-credentials*.enc
+.assistant-*.tmp
 .venv/
 venv/
 __pycache__/
