@@ -1,10 +1,31 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import { Anchor, Badge, Button, Text, Title } from "@mantine/core";
+import { IconArrowRight } from "@tabler/icons-react";
+import { list, reason, request, send } from "../../lib/api";
+import type { Balance, Occurrence, Summary } from "../../lib/api";
+import {
+  dateTime,
+  localPeriod,
+  money,
+  quantity,
+  today,
+} from "../../lib/format";
+import { href } from "../../lib/route";
+import type { Route } from "../../lib/route";
+import { useToast } from "../../ui/Toaster";
+import { TileMark } from "../../ui/Tile";
+import type { Motif } from "../../ui/Tile";
+import {
+  EmptyState,
+  ErrorNote,
+  Loading,
+  PageHeader,
+  TileMeter,
+} from "../../ui/parts";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type Section<T> = { data: T | null; error: string; loading: boolean };
-type Summary = { spent_total: number; budget_total: number };
-type Balance = { membership_id: number; name: string; balance_minor: number };
-type List = {
+type ShoppingList = {
   id: number;
   name: string;
   status: string;
@@ -16,30 +37,8 @@ type List = {
     status: string;
   }[];
 };
-type Occurrence = {
-  id: number;
-  title: string;
-  due_at: string;
-  status: string;
-  assigned_name?: string | null;
-};
 
-async function get<T>(path: string): Promise<T> {
-  const response = await fetch(`${API}${path}`, { credentials: "include" });
-  const data = await response.json();
-  if (!response.ok)
-    throw new Error(data.detail ?? "Não foi possível carregar esta seção.");
-  return data as T;
-}
-
-function money(cents: number) {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-  }).format(cents / 100);
-}
-
-function useSection<T>(loader: () => Promise<T>, deps: string[]): Section<T> {
+function useSection<T>(loader: () => Promise<T>, key: string): Section<T> {
   const [state, setState] = useState<Section<T>>({
     data: null,
     error: "",
@@ -48,202 +47,316 @@ function useSection<T>(loader: () => Promise<T>, deps: string[]): Section<T> {
   useEffect(() => {
     let active = true;
     setState({ data: null, error: "", loading: true });
-    void loader()
-      .then((data) => {
-        if (active) setState({ data, error: "", loading: false });
-      })
-      .catch((reason: unknown) => {
+    loader()
+      .then((data) => active && setState({ data, error: "", loading: false }))
+      .catch((cause: unknown) => {
         if (active)
           setState({
             data: null,
             error:
-              reason instanceof Error ? reason.message : "Falha ao carregar.",
+              cause instanceof Error ? cause.message : "Falha ao carregar.",
             loading: false,
           });
       });
     return () => {
       active = false;
     };
-    // The household ID is the loader's only changing input.
+    // The key holds every changing input of the loader.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+  }, [key]);
   return state;
+}
+
+function Panel({
+  motif,
+  title,
+  id,
+  route,
+  linkLabel,
+  className,
+  children,
+}: {
+  motif: Motif;
+  title: string;
+  id: string;
+  route: Route;
+  linkLabel: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={`tile dash-tile ${className ?? ""}`}
+      aria-labelledby={id}
+    >
+      <div className="tile-head">
+        <TileMark motif={motif} size={28} />
+        <Title order={2} id={id}>
+          {title}
+        </Title>
+      </div>
+      <div className="dash-body">{children}</div>
+      <Anchor href={href(route)} className="dash-link" fw={600}>
+        {linkLabel}
+        <IconArrowRight size={16} aria-hidden="true" />
+      </Anchor>
+    </section>
+  );
 }
 
 export default function Dashboard({
   householdId,
   householdName,
+  role,
+  children,
 }: {
   householdId: string;
   householdName: string;
+  role?: string;
+  children?: ReactNode;
 }) {
   const now = new Date();
-  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const writable = Boolean(role) && role !== "viewer";
+  const toast = useToast();
+  const [handled, setHandled] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState("");
+  async function act(key: string, call: () => Promise<unknown>, done: string) {
+    setActionError("");
+    try {
+      await call();
+      setHandled((current) => new Set(current).add(key));
+      toast.success(done);
+    } catch (cause) {
+      setActionError(reason(cause, "Não foi possível concluir a ação."));
+    }
+  }
+  const period = localPeriod(now);
   const finance = useSection(async () => {
     const [summary, balances] = await Promise.all([
-      get<Summary>(
+      request<Summary>(
         `/households/${householdId}/financial-summary?period=${period}`,
       ),
-      get<Balance[]>(`/households/${householdId}/settlements`),
+      request<Balance[]>(`/households/${householdId}/settlements`),
     ]);
-    return { summary, balances };
-  }, [householdId, period]);
+    return {
+      spent: summary?.spent_total ?? 0,
+      budget: summary?.budget_total ?? 0,
+      balances: list<Balance>(balances),
+    };
+  }, `${householdId}|${period}`);
   const shopping = useSection(async () => {
-    const lists = await get<List[]>(
-      `/households/${householdId}/shopping-lists`,
+    const lists = list<ShoppingList>(
+      await request<ShoppingList[]>(
+        `/households/${householdId}/shopping-lists`,
+      ),
     );
     return lists
-      .filter((list) => list.status === "active")
-      .flatMap((list) =>
-        list.items
+      .filter((entry) => entry.status === "active")
+      .flatMap((entry) =>
+        list<ShoppingList["items"][number]>(entry.items)
           .filter((item) => item.status === "needed")
-          .map((item) => ({ ...item, listName: list.name })),
+          .map((item) => ({ ...item, listName: entry.name })),
       );
-  }, [householdId]);
+  }, householdId);
   const chores = useSection(
-    () => get<Occurrence[]>(`/households/${householdId}/chore-occurrences`),
-    [householdId],
+    async () =>
+      list<Occurrence>(
+        await request(`/households/${householdId}/chore-occurrences`),
+      ),
+    householdId,
+  );
+  const toBuy = (shopping.data ?? []).filter(
+    (item) => !handled.has(`s${item.id}`),
   );
   const due = (chores.data ?? [])
-    .filter((item) => item.status === "pending")
+    .filter((item) => item.status === "pending" && !handled.has(`c${item.id}`))
     .sort((a, b) => a.due_at.localeCompare(b.due_at));
+
   return (
-    <section className="dashboard" aria-labelledby="dashboard-title">
-      <p className="eyebrow">VISÃO GERAL DA RESIDÊNCIA</p>
-      <h1 id="dashboard-title">{householdName}</h1>
-      <div className="dashboard-grid">
-        <section
-          className="dashboard-card"
-          aria-labelledby="dashboard-finance-title"
+    <div className="page dashboard">
+      <PageHeader motif="arcos" title={householdName} id="dashboard-title">
+        <span className="capitalize">{today()}</span>
+      </PageHeader>
+
+      {actionError && <ErrorNote>{actionError}</ErrorNote>}
+      <div className="tile-wall dashboard-grid">
+        <Panel
+          motif="losango"
+          title="Finanças deste mês"
+          id="dashboard-finance-title"
+          route="financas"
+          linkLabel="Abrir finanças"
+          className="dash-finance"
         >
-          <h2 id="dashboard-finance-title">Finanças deste mês</h2>
           {finance.loading ? (
-            <p role="status">Carregando finanças…</p>
+            <Loading label="Carregando finanças…" />
           ) : finance.error ? (
-            <p role="alert" aria-label="Erro em finanças">
-              {finance.error}
-            </p>
+            <ErrorNote label="Erro em finanças">{finance.error}</ErrorNote>
           ) : (
             <>
-              <p>
-                Gastos do mês{" "}
-                <strong>{money(finance.data!.summary.spent_total)}</strong>
+              <p className="statement">
+                <strong>{money(finance.data!.spent)}</strong> em gastos do mês
+                {finance.data!.budget > 0 ? (
+                  <>
+                    ; orçamento restante de{" "}
+                    <strong>
+                      {money(
+                        Math.max(0, finance.data!.budget - finance.data!.spent),
+                      )}
+                    </strong>
+                    .
+                  </>
+                ) : (
+                  ", sem orçamento definido."
+                )}
               </p>
-              <p>
-                Orçamento restante{" "}
-                <strong>
-                  {money(
-                    Math.max(
-                      0,
-                      finance.data!.summary.budget_total -
-                        finance.data!.summary.spent_total,
-                    ),
-                  )}
-                </strong>
-              </p>
+              {finance.data!.budget > 0 && (
+                <TileMeter
+                  value={finance.data!.spent}
+                  total={finance.data!.budget}
+                />
+              )}
+              {finance.data!.spent === 0 && (
+                <Text size="sm" c="dimmed">
+                  Sem gastos registrados neste mês.
+                </Text>
+              )}
               {finance.data!.balances.length ? (
-                <ul>
+                <ul className="rows rows-compact">
                   {finance.data!.balances.map((balance) => (
-                    <li key={balance.membership_id}>
-                      {balance.name}: {money(balance.balance_minor)}{" "}
-                      {balance.balance_minor < 0 ? "a acertar" : "de crédito"}
+                    <li key={balance.membership_id} className="row">
+                      <span className="row-main">{balance.name}</span>
+                      <span
+                        className="amount"
+                        data-negative={balance.balance_minor < 0 || undefined}
+                      >
+                        {money(balance.balance_minor)}{" "}
+                        <small>
+                          {balance.balance_minor < 0
+                            ? "a acertar"
+                            : "de crédito"}
+                        </small>
+                      </span>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="empty">Sem saldos para acertar.</p>
-              )}
-              {finance.data!.summary.spent_total === 0 && (
-                <p className="empty">Sem gastos registrados neste mês.</p>
+                <Text size="sm" c="dimmed">
+                  Sem saldos para acertar.
+                </Text>
               )}
             </>
           )}
-          <a
-            href="#financas"
-            onClick={(event) => {
-              event.preventDefault();
-              window.dispatchEvent(
-                new CustomEvent("home-os:open", { detail: "finance" }),
-              );
-            }}
-          >
-            Abrir finanças
-          </a>
-        </section>
-        <section
-          className="dashboard-card"
-          aria-labelledby="dashboard-shopping-title"
+        </Panel>
+
+        <Panel
+          motif="flor"
+          title="Lista de compras"
+          id="dashboard-shopping-title"
+          route="compras"
+          linkLabel="Abrir compras e estoque"
         >
-          <h2 id="dashboard-shopping-title">Lista de compras</h2>
           {shopping.loading ? (
-            <p role="status">Carregando lista…</p>
+            <Loading label="Carregando lista…" />
           ) : shopping.error ? (
-            <p role="alert" aria-label="Erro em compras">
-              {shopping.error}
-            </p>
-          ) : shopping.data!.length ? (
-            <ul>
-              {shopping.data!.map((item) => (
-                <li key={item.id}>
-                  {item.name} · {item.quantity} {item.unit}
+            <ErrorNote label="Erro em compras">{shopping.error}</ErrorNote>
+          ) : toBuy.length ? (
+            <ul className="rows rows-compact">
+              {toBuy.slice(0, 7).map((item) => (
+                <li key={item.id} className="row">
+                  <span className="row-main">{item.name}</span>
+                  <span className="row-meta">
+                    {quantity(item.quantity)} {item.unit}
+                  </span>
+                  {writable && (
+                    <Button
+                      size="compact-sm"
+                      variant="light"
+                      aria-label={`Marcar ${item.name} como comprado`}
+                      onClick={() =>
+                        void act(
+                          `s${item.id}`,
+                          () =>
+                            send(
+                              `/shopping-items/${item.id}`,
+                              { status: "purchased" },
+                              "PATCH",
+                            ),
+                          "Item marcado como comprado.",
+                        )
+                      }
+                    >
+                      Comprei
+                    </Button>
+                  )}
                 </li>
               ))}
+              {toBuy.length > 7 && (
+                <li className="row row-more">
+                  e mais {toBuy.length - 7} itens
+                </li>
+              )}
             </ul>
           ) : (
-            <p className="empty">Nenhum item pendente nas listas ativas.</p>
+            <EmptyState>Nenhum item pendente nas listas ativas.</EmptyState>
           )}
-          <a
-            href="#compras"
-            onClick={(event) => {
-              event.preventDefault();
-              window.dispatchEvent(
-                new CustomEvent("home-os:open", { detail: "shopping" }),
-              );
-            }}
-          >
-            Abrir compras e estoque
-          </a>
-        </section>
-        <section
-          className="dashboard-card"
-          aria-labelledby="dashboard-chores-title"
+        </Panel>
+
+        <Panel
+          motif="catavento"
+          title="Tarefas vencidas e próximas"
+          id="dashboard-chores-title"
+          route="tarefas"
+          linkLabel="Abrir tarefas e rotinas"
         >
-          <h2 id="dashboard-chores-title">Tarefas vencidas e próximas</h2>
           {chores.loading ? (
-            <p role="status">Carregando tarefas…</p>
+            <Loading label="Carregando tarefas…" />
           ) : chores.error ? (
-            <p role="alert" aria-label="Erro em tarefas">
-              {chores.error}
-            </p>
+            <ErrorNote label="Erro em tarefas">{chores.error}</ErrorNote>
           ) : due.length ? (
-            <ul>
-              {due.map((item) => (
-                <li key={item.id}>
-                  {item.title} ·{" "}
-                  {new Intl.DateTimeFormat("pt-BR", {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  }).format(new Date(item.due_at))}
-                  {new Date(item.due_at) < now ? " · Atrasada" : " · Pendente"}
-                </li>
-              ))}
+            <ul className="rows rows-compact">
+              {due.slice(0, 6).map((item) => {
+                const late = new Date(item.due_at) < now;
+                return (
+                  <li key={item.id} className="row">
+                    <span className="row-main">
+                      <span className="row-title">{item.title}</span>
+                      <span className="row-meta">{dateTime(item.due_at)}</span>
+                    </span>
+                    {writable ? (
+                      <Button
+                        size="compact-sm"
+                        variant="light"
+                        color={late ? "ocre.5" : "azulejo"}
+                        aria-label={`Concluir ${item.title}`}
+                        onClick={() =>
+                          void act(
+                            `c${item.id}`,
+                            () =>
+                              send(`/chore-occurrences/${item.id}/complete`, {
+                                status: "completed",
+                              }),
+                            "Ocorrência concluída.",
+                          )
+                        }
+                      >
+                        {late ? "Atrasada · Concluir" : "Concluir"}
+                      </Button>
+                    ) : (
+                      <Badge variant="light" color={late ? "ocre" : "azulejo"}>
+                        {late ? "Atrasada" : "Pendente"}
+                      </Badge>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           ) : (
-            <p className="empty">Nenhuma tarefa pendente.</p>
+            <EmptyState>Nenhuma tarefa pendente.</EmptyState>
           )}
-          <a
-            href="#tarefas"
-            onClick={(event) => {
-              event.preventDefault();
-              window.dispatchEvent(
-                new CustomEvent("home-os:open", { detail: "chores" }),
-              );
-            }}
-          >
-            Abrir tarefas e rotinas
-          </a>
-        </section>
+        </Panel>
       </div>
-    </section>
+      {children}
+    </div>
   );
 }

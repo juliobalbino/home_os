@@ -1,12 +1,38 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  Badge,
+  Button,
+  Checkbox,
+  Collapse,
+  Group,
+  NativeSelect,
+  Text,
+  TextInput,
+} from "@mantine/core";
+import { IconCash, IconPlus } from "@tabler/icons-react";
+import { list, reason, request, send } from "../../lib/api";
+import type { Balance, Member, Summary } from "../../lib/api";
+import {
+  isoDay,
+  localDay,
+  localPeriod,
+  money,
+  monthName,
+  parseMoney,
+} from "../../lib/format";
+import { useToast } from "../../ui/Toaster";
+import { SectionNav } from "../../ui/SectionNav";
+import {
+  EmptyState,
+  ErrorNote,
+  Loading,
+  PageHeader,
+  TileMeter,
+  TileSection,
+} from "../../ui/parts";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
-const localDate = new Date();
-const localPeriod = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}`;
-const localDateString = `${localPeriod}-${String(localDate.getDate()).padStart(2, "0")}`;
 type Category = { id: number; name: string; kind: string };
-type Member = { id: number; name: string; role: string };
 type Expense = {
   id: number;
   description: string;
@@ -21,47 +47,81 @@ type Expense = {
     amount_minor: number;
   }[];
 };
-type Summary = { spent_total: number; budget_total: number };
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
-    credentials: "include",
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  const data = await response.json();
-  if (!response.ok)
-    throw new Error(
-      data.detail ??
-        Object.values(data).flat().join(" ") ??
-        "Falha na solicitação.",
-    );
-  return data as T;
+const STATUS: Record<string, { label: string; color: string }> = {
+  paid: { label: "Paga", color: "azulejo" },
+  partial: { label: "Parcialmente paga", color: "ocre" },
+};
+
+function dayParts(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  if (!year || !month || !date) return { day: "", month: day };
+  return {
+    day: String(date),
+    month: new Intl.DateTimeFormat("pt-BR", { month: "short" })
+      .format(new Date(year, month - 1, date))
+      .replace(".", ""),
+  };
 }
 
-function money(cents: number) {
-  const absolute = Math.abs(cents);
-  const major = String(Math.trunc(absolute / 100)).replace(
-    /\B(?=(\d{3})+(?!\d))/g,
-    ".",
+function PaymentForm({
+  expense,
+  members,
+  busy,
+  onPay,
+}: {
+  expense: Expense;
+  members: Member[];
+  busy: boolean;
+  onPay: (
+    event: FormEvent<HTMLFormElement>,
+    expenseId: number,
+  ) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="payment">
+      <Button
+        size="xs"
+        variant="subtle"
+        leftSection={<IconCash size={14} aria-hidden="true" />}
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        {open ? "Fechar pagamento" : "Registrar pagamento"}
+      </Button>
+      <Collapse expanded={open}>
+        <form
+          className="payment-form"
+          onSubmit={(event) => void onPay(event, expense.id)}
+        >
+          <TextInput
+            label="Registrar pagamento (R$)"
+            name="amount"
+            inputMode="decimal"
+            required
+            placeholder="0,00"
+            size="sm"
+            defaultValue={money(
+              expense.amount_minor - expense.paid_total,
+            ).replace("R$ ", "")}
+          />
+          <NativeSelect
+            label="Pago por"
+            name="payer_id"
+            size="sm"
+            data={members.map((member) => ({
+              value: String(member.id),
+              label: member.name,
+            }))}
+          />
+          <Button type="submit" size="sm" loading={busy}>
+            Salvar pagamento
+          </Button>
+        </form>
+      </Collapse>
+    </div>
   );
-  return `R$ ${cents < 0 ? "-" : ""}${major},${String(absolute % 100).padStart(2, "0")}`;
-}
-
-function parseMoney(value: string): number | null {
-  const normalized = value
-    .trim()
-    .replace(/^R\$\s*/, "")
-    .replace(/\./g, "")
-    .replace(",", ".");
-  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
-  const [whole, fraction = ""] = normalized.split(".");
-  const cents = `${fraction}00`.slice(0, 2);
-  const result = `${whole}${cents}`.replace(/^0+(?=\d)/, "");
-  if (result.length > 15) return null;
-  return result
-    .split("")
-    .reduce((amount, digit) => amount * 10 + digit.charCodeAt(0) - 48, 0);
 }
 
 export default function Finance({
@@ -79,18 +139,15 @@ export default function Finance({
     spent_total: 0,
     budget_total: 0,
   });
-  const [balances, setBalances] = useState<
-    { membership_id: number; name: string; balance_minor: number }[]
-  >([]);
+  const [balances, setBalances] = useState<Balance[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [splitMethod, setSplitMethod] = useState("equal");
   const [period] = useState(localPeriod);
+  const toast = useToast();
 
   const refresh = useCallback(async () => {
-    setLoading(true);
     setError("");
     try {
       const [categoryRows, memberRows, expenseRows, summaryRow, balanceRows] =
@@ -103,19 +160,18 @@ export default function Finance({
           request<Summary>(
             `/households/${householdId}/financial-summary?period=${period}`,
           ),
-          request<typeof balances>(`/households/${householdId}/settlements`),
+          request<Balance[]>(`/households/${householdId}/settlements`),
         ]);
-      setCategories(categoryRows);
-      setMembers(memberRows);
-      setExpenses(expenseRows);
-      setSummary(summaryRow);
-      setBalances(balanceRows);
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Não foi possível carregar as finanças.",
-      );
+      setCategories(list<Category>(categoryRows));
+      setMembers(list<Member>(memberRows));
+      setExpenses(list<Expense>(expenseRows));
+      setSummary({
+        spent_total: summaryRow?.spent_total ?? 0,
+        budget_total: summaryRow?.budget_total ?? 0,
+      });
+      setBalances(list<Balance>(balanceRows));
+    } catch (cause) {
+      setError(reason(cause, "Não foi possível carregar as finanças."));
     } finally {
       setLoading(false);
     }
@@ -132,21 +188,13 @@ export default function Finance({
   ): Promise<boolean> {
     setBusy(true);
     setError("");
-    setNotice("");
     try {
-      const csrf = await request<{ csrfToken: string }>("/auth/csrf");
-      await request(path, {
-        method,
-        headers: { "X-CSRFToken": csrf.csrfToken },
-        body: JSON.stringify(payload),
-      });
-      setNotice("Alterações salvas com sucesso.");
+      await send(path, payload, method);
+      toast.success("Alterações salvas com sucesso.");
       await refresh();
       return true;
-    } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Não foi possível salvar.",
-      );
+    } catch (cause) {
+      setError(reason(cause, "Não foi possível salvar."));
       return false;
     } finally {
       setBusy(false);
@@ -155,59 +203,55 @@ export default function Finance({
 
   async function submitCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const formElement = event.currentTarget;
+    const form = event.currentTarget;
+    const name = new FormData(form).get("name");
     if (
-      await mutate(`/finance/categories`, {
-        household_id: householdId,
-        name: form.get("name"),
-      })
+      await mutate(`/finance/categories`, { household_id: householdId, name })
     )
-      formElement.reset();
+      form.reset();
   }
 
   async function submitExpense(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const amount = parseMoney(String(form.get("amount") ?? ""));
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const amount = parseMoney(String(data.get("amount") ?? ""));
     if (!amount) {
       setError("Informe um valor válido em reais.");
       return;
     }
-    const selected = Array.from(form.getAll("members")).map((id) => {
+    const splits = data.getAll("members").map((id) => {
       const membershipId = Number.parseInt(String(id), 10);
       if (splitMethod === "equal") return { membership_id: membershipId };
-      const raw = String(form.get(`share-${membershipId}`) ?? "");
+      const raw = String(data.get(`share-${membershipId}`) ?? "");
       if (splitMethod === "percentage") {
         if (!/^\d+(?:[.,]\d{1,4})?$/.test(raw)) return null;
-        return {
-          membership_id: membershipId,
-          percent: raw.replace(",", "."),
-        };
+        return { membership_id: membershipId, percent: raw.replace(",", ".") };
       }
       const amountMinor = parseMoney(raw);
       return amountMinor === null
         ? null
         : { membership_id: membershipId, amount_minor: amountMinor };
     });
-    if (!selected.length || selected.some((item) => item === null)) {
+    if (!splits.length || splits.some((item) => item === null)) {
       setError(
         "Selecione participantes e informe valores válidos para a divisão.",
       );
       return;
     }
-    const formElement = event.currentTarget;
     if (
       await mutate(`/households/${householdId}/expenses`, {
-        description: form.get("description"),
-        category_id: Number.parseInt(String(form.get("category_id")), 10),
+        description: data.get("description"),
+        category_id: Number.parseInt(String(data.get("category_id")), 10),
         amount_minor: amount,
-        incurred_on: form.get("incurred_on"),
+        incurred_on: data.get("incurred_on"),
         split_method: splitMethod,
-        splits: selected,
+        splits,
       })
-    )
-      formElement.reset();
+    ) {
+      form.reset();
+      setSplitMethod("equal");
+    }
   }
 
   async function registerPayment(
@@ -215,31 +259,30 @@ export default function Finance({
     expenseId: number,
   ) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const amount = parseMoney(String(form.get("amount") ?? ""));
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const amount = parseMoney(String(data.get("amount") ?? ""));
     if (!amount) {
       setError("Informe um pagamento válido em reais.");
       return;
     }
-    const formElement = event.currentTarget;
     if (
       await mutate(`/expenses/${expenseId}/payments`, {
-        payer_id: Number.parseInt(String(form.get("payer_id")), 10),
+        payer_id: Number.parseInt(String(data.get("payer_id")), 10),
         amount_minor: amount,
       })
     )
-      formElement.reset();
+      form.reset();
   }
 
   async function submitBudget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const amount = parseMoney(String(form.get("amount") ?? ""));
+    const form = event.currentTarget;
+    const amount = parseMoney(String(new FormData(form).get("amount") ?? ""));
     if (!amount) {
       setError("Informe um orçamento válido em reais.");
       return;
     }
-    const formElement = event.currentTarget;
     if (
       await mutate(
         `/households/${householdId}/budgets/${period}`,
@@ -247,203 +290,327 @@ export default function Finance({
         "PUT",
       )
     )
-      formElement.reset();
+      form.reset();
   }
 
-  if (loading) return <p role="status">Carregando finanças…</p>;
-  return (
-    <section className="finance-panel" aria-labelledby="finance-title">
-      <h1 id="finance-title">Finanças da residência</h1>
-      {error && (
-        <p role="alert" className="message">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="message">
-          {notice}
-        </p>
-      )}
-      <div className="finance-summary">
-        <p>
-          Gastos do mês: <strong>{money(summary.spent_total)}</strong>
-        </p>
-        <p>
-          Orçamento do mês: <strong>{money(summary.budget_total)}</strong>
-        </p>
+  const header = (
+    <PageHeader
+      motif="losango"
+      title="Finanças da residência"
+      id="finance-title"
+    >
+      <span className="capitalize">{monthName(period)}</span>
+    </PageHeader>
+  );
+
+  if (loading)
+    return (
+      <div className="page">
+        {header}
+        <div className="tile-wall">
+          <section className="tile">
+            <Loading label="Carregando finanças…" lines={4} />
+          </section>
+        </div>
       </div>
+    );
+
+  const remaining = summary.budget_total - summary.spent_total;
+  return (
+    <div className="page">
+      {header}
       {canWrite && (
-        <form className="form-stack finance-form" onSubmit={submitCategory}>
-          <h2>Nova categoria</h2>
-          <label>
-            Nome da categoria
-            <input name="name" maxLength={80} required />
-          </label>
-          <button disabled={busy}>Criar categoria</button>
-        </form>
+        <SectionNav
+          label="Seções de finanças"
+          sections={[
+            { id: "resumo", label: "Resumo" },
+            { id: "lancar", label: "Lançar" },
+            { id: "despesas", label: "Despesas" },
+            { id: "saldos", label: "Saldos" },
+          ]}
+        />
       )}
-      {canWrite && (
-        <form className="form-stack finance-form" onSubmit={submitExpense}>
-          <h2>Registrar despesa</h2>
-          <label>
-            Descrição
-            <input name="description" required maxLength={200} />
-          </label>
-          <label>
-            Categoria
-            <select name="category_id" required>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Valor (R$)
-            <input
-              name="amount"
-              inputMode="decimal"
-              placeholder="0,00"
-              required
+      {error && <ErrorNote>{error}</ErrorNote>}
+      <div className="tile-wall module-grid">
+        <TileSection
+          id="resumo"
+          className="span-full summary"
+          labelledBy="finance-title"
+        >
+          <p className="statement">
+            A casa gastou <strong>{money(summary.spent_total)}</strong> neste
+            mês
+            {summary.budget_total > 0 ? (
+              <>
+                , de um orçamento de{" "}
+                <strong>{money(summary.budget_total)}</strong>.{" "}
+                {remaining < 0 ? "Passou " : "Ainda restam "}
+                <strong data-negative={remaining < 0 || undefined}>
+                  {money(Math.abs(remaining))}
+                </strong>
+                {remaining < 0 ? " do previsto." : "."}
+              </>
+            ) : (
+              "."
+            )}
+          </p>
+          {summary.budget_total > 0 ? (
+            <TileMeter
+              value={summary.spent_total}
+              total={summary.budget_total}
             />
-          </label>
-          <label>
-            Data
-            <input
-              name="incurred_on"
-              type="date"
-              required
-              defaultValue={localDateString}
-            />
-          </label>
-          <label>
-            Método de divisão
-            <select
-              name="split_method"
-              value={splitMethod}
-              onChange={(event) => setSplitMethod(event.target.value)}
-            >
-              <option value="equal">Partes iguais</option>
-              <option value="percentage">Percentuais</option>
-              <option value="fixed">Valores fixos</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>Participantes da divisão</legend>
-            {members.map((member) => (
-              <label key={member.id}>
-                <input
-                  type="checkbox"
-                  name="members"
-                  value={member.id}
-                  defaultChecked
+          ) : (
+            <Text size="sm" c="dimmed">
+              Nenhum orçamento definido para este mês.
+            </Text>
+          )}
+        </TileSection>
+
+        <div className="col">
+          <TileSection title="Despesas" id="despesas" order={2}>
+            {expenses.length === 0 ? (
+              <EmptyState>Ainda não há despesas cadastradas.</EmptyState>
+            ) : (
+              <ul className="rows">
+                {expenses.map((expense) => {
+                  const status = STATUS[expense.status] ?? {
+                    label: "Não paga",
+                    color: "barro",
+                  };
+                  const day = dayParts(expense.incurred_on);
+                  return (
+                    <li key={expense.id} className="row row-top">
+                      <span className="date-tile" aria-hidden="true">
+                        <span>
+                          <b>{day.day}</b>
+                          {day.month}
+                        </span>
+                      </span>
+                      <span className="row-main">
+                        <span className="row-title">{expense.description}</span>
+                        <span className="row-meta">
+                          {expense.category} · {isoDay(expense.incurred_on)} ·
+                          pago {money(expense.paid_total)}
+                        </span>
+                        {expense.splits.length > 0 && (
+                          <span className="row-meta">
+                            {expense.splits
+                              .map(
+                                (split) =>
+                                  `${split.member_name}: ${money(split.amount_minor)}`,
+                              )
+                              .join(" · ")}
+                          </span>
+                        )}
+                        {canWrite && expense.status !== "paid" && (
+                          <PaymentForm
+                            expense={expense}
+                            members={members}
+                            busy={busy}
+                            onPay={registerPayment}
+                          />
+                        )}
+                      </span>
+                      <span className="row-end">
+                        <strong className="amount">
+                          {money(expense.amount_minor)}
+                        </strong>
+                        <Badge variant="light" color={status.color} size="sm">
+                          {status.label}
+                        </Badge>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </TileSection>
+        </div>
+
+        <div className="col">
+          {canWrite && (
+            <TileSection title="Registrar despesa" id="lancar" order={1}>
+              <form
+                className="stack"
+                onSubmit={(event) => void submitExpense(event)}
+              >
+                <TextInput
+                  label="Descrição"
+                  name="description"
+                  required
+                  maxLength={200}
                 />
-                {member.name}
-                {splitMethod !== "equal" && (
-                  <input
-                    aria-label={`${splitMethod === "percentage" ? "Percentual" : "Valor em reais"} de ${member.name}`}
-                    name={`share-${member.id}`}
+                <div className="pair">
+                  <TextInput
+                    label="Valor (R$)"
+                    name="amount"
                     inputMode="decimal"
-                    placeholder={
-                      splitMethod === "percentage" ? "0,0000%" : "0,00"
-                    }
-                    maxLength={splitMethod === "percentage" ? 10 : undefined}
+                    placeholder="0,00"
                     required
                   />
-                )}
-              </label>
-            ))}
-          </fieldset>
-          <button disabled={busy || categories.length === 0}>
-            Salvar despesa
-          </button>
-        </form>
-      )}
-      {canWrite && (
-        <form className="form-stack finance-form" onSubmit={submitBudget}>
-          <h2>Orçamento do mês · {period}</h2>
-          <label>
-            Valor (R$)
-            <input
-              name="amount"
-              inputMode="decimal"
-              placeholder="0,00"
-              required
-            />
-          </label>
-          <button disabled={busy}>Salvar orçamento</button>
-        </form>
-      )}
-      <h2>Despesas</h2>
-      {expenses.length === 0 ? (
-        <p className="empty">Ainda não há despesas cadastradas.</p>
-      ) : (
-        <div className="house-list">
-          {expenses.map((expense) => (
-            <article className="house-card" key={expense.id}>
-              <div>
-                <h3>{expense.description}</h3>
-                <p>
-                  {expense.category} · {expense.incurred_on} ·{" "}
-                  {money(expense.amount_minor)}
-                </p>
-                <p>
-                  Pago: {money(expense.paid_total)} · Status:{" "}
-                  {expense.status === "paid"
-                    ? "paga"
-                    : expense.status === "partial"
-                      ? "parcialmente paga"
-                      : "não paga"}
-                </p>
-                <p>
-                  {expense.splits
-                    .map(
-                      (split) =>
-                        `${split.member_name}: ${money(split.amount_minor)}`,
-                    )
-                    .join(" · ")}
-                </p>
-                {canWrite && expense.status !== "paid" && (
-                  <form
-                    onSubmit={(event) => registerPayment(event, expense.id)}
-                  >
-                    <label>
-                      Registrar pagamento (R$)
-                      <input
-                        name="amount"
-                        inputMode="decimal"
-                        required
-                        placeholder="0,00"
+                  <TextInput
+                    label="Data"
+                    name="incurred_on"
+                    type="date"
+                    required
+                    defaultValue={localDay()}
+                  />
+                </div>
+                <NativeSelect
+                  label="Categoria"
+                  name="category_id"
+                  required
+                  data={categories.map((category) => ({
+                    value: String(category.id),
+                    label: category.name,
+                  }))}
+                  description={
+                    categories.length
+                      ? undefined
+                      : "Crie uma categoria primeiro."
+                  }
+                />
+                <NativeSelect
+                  label="Método de divisão"
+                  name="split_method"
+                  value={splitMethod}
+                  onChange={(event) =>
+                    setSplitMethod(event.currentTarget.value)
+                  }
+                  data={[
+                    { value: "equal", label: "Partes iguais" },
+                    { value: "percentage", label: "Percentuais" },
+                    { value: "fixed", label: "Valores fixos" },
+                  ]}
+                />
+                <fieldset className="split">
+                  <legend>Participantes da divisão</legend>
+                  {members.map((member) => (
+                    <div key={member.id} className="split-row">
+                      <Checkbox
+                        name="members"
+                        value={member.id}
+                        defaultChecked
+                        label={member.name}
                       />
-                    </label>
-                    <label>
-                      Pago por
-                      <select name="payer_id">
-                        {members.map((member) => (
-                          <option key={member.id} value={member.id}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button disabled={busy}>Registrar pagamento</button>
-                  </form>
-                )}
-              </div>
-            </article>
-          ))}
+                      {splitMethod !== "equal" && (
+                        <TextInput
+                          aria-label={`${splitMethod === "percentage" ? "Percentual" : "Valor em reais"} de ${member.name}`}
+                          name={`share-${member.id}`}
+                          inputMode="decimal"
+                          placeholder={
+                            splitMethod === "percentage" ? "0%" : "0,00"
+                          }
+                          maxLength={
+                            splitMethod === "percentage" ? 10 : undefined
+                          }
+                          required
+                          size="sm"
+                          className="split-share"
+                        />
+                      )}
+                    </div>
+                  ))}
+                  {!members.length && (
+                    <Text size="sm" c="dimmed">
+                      Nenhum morador encontrado.
+                    </Text>
+                  )}
+                </fieldset>
+                <Button
+                  type="submit"
+                  loading={busy}
+                  disabled={categories.length === 0}
+                >
+                  Salvar despesa
+                </Button>
+              </form>
+            </TileSection>
+          )}
+
+          <TileSection title="Saldos dos membros" id="saldos" order={3}>
+            {balances.length ? (
+              <ul className="rows rows-compact">
+                {balances.map((item) => (
+                  <li key={item.membership_id} className="row">
+                    <span className="row-main">{item.name}</span>
+                    <span
+                      className="amount"
+                      data-negative={item.balance_minor < 0 || undefined}
+                    >
+                      {money(item.balance_minor)}{" "}
+                      <small>
+                        {item.balance_minor >= 0 ? "de crédito" : "de dívida"}
+                      </small>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <Text size="sm" c="dimmed">
+                Sem saldos para acertar.
+              </Text>
+            )}
+          </TileSection>
+
+          {canWrite && (
+            <TileSection
+              title={`Orçamento de ${monthName(period)}`}
+              id="orcamento"
+              order={4}
+            >
+              <form
+                className="inline-form"
+                onSubmit={(event) => void submitBudget(event)}
+              >
+                <TextInput
+                  label="Valor (R$)"
+                  name="amount"
+                  inputMode="decimal"
+                  placeholder="0,00"
+                  required
+                />
+                <Button type="submit" variant="light" loading={busy}>
+                  Salvar orçamento
+                </Button>
+              </form>
+            </TileSection>
+          )}
+
+          {canWrite && (
+            <TileSection title="Nova categoria" id="categorias" order={5}>
+              <form
+                className="inline-form"
+                onSubmit={(event) => void submitCategory(event)}
+              >
+                <TextInput
+                  label="Nome da categoria"
+                  name="name"
+                  maxLength={80}
+                  required
+                />
+                <Button
+                  type="submit"
+                  variant="light"
+                  loading={busy}
+                  leftSection={<IconPlus size={16} aria-hidden="true" />}
+                >
+                  Criar categoria
+                </Button>
+              </form>
+              {categories.length > 0 && (
+                <Group gap={6} mt="sm">
+                  {categories.map((category) => (
+                    <Badge key={category.id} variant="outline" color="gray">
+                      {category.name}
+                    </Badge>
+                  ))}
+                </Group>
+              )}
+            </TileSection>
+          )}
         </div>
-      )}
-      <h2>Saldos dos membros</h2>
-      <ul>
-        {balances.map((item) => (
-          <li key={item.membership_id}>
-            {item.name}: {money(item.balance_minor)}{" "}
-            {item.balance_minor >= 0 ? "de crédito" : "de dívida"}
-          </li>
-        ))}
-      </ul>
-    </section>
+      </div>
+    </div>
   );
 }

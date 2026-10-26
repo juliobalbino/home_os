@@ -1,6 +1,21 @@
 import { useEffect, useState } from "react";
+import {
+  Anchor,
+  Badge,
+  Button,
+  FileInput,
+  Group,
+  NativeSelect,
+  Text,
+  Textarea,
+  Title,
+} from "@mantine/core";
+import { IconExternalLink, IconPhoto, IconSparkles } from "@tabler/icons-react";
+import { AnimatePresence, motion } from "motion/react";
+import { reason, request, send } from "../../lib/api";
+import { TileMark } from "../../ui/Tile";
+import { ErrorNote } from "../../ui/parts";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type Status = {
   enabled: boolean;
   connected: boolean;
@@ -13,155 +28,212 @@ type Result = {
   requires_confirmation: boolean;
 };
 
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+function statusText(status: Status | null) {
+  if (!status) return "Verificando o assistente…";
+  if (status.connected) return "Conectado à sua conta ChatGPT";
+  switch (status.configuration) {
+    case "disabled":
+      return "Assistente desativado. Configure ASSISTANT_ENABLED=true e uma chave Fernet válida em ASSISTANT_ENCRYPTION_KEY.";
+    case "missing_or_invalid_encryption_key":
+      return "Assistente indisponível: ASSISTANT_ENCRYPTION_KEY precisa ser uma chave Fernet válida.";
+    case "credential_unavailable":
+      return "As credenciais não podem ser decifradas. Verifique se ASSISTANT_ENCRYPTION_KEY corresponde à chave usada na importação.";
+  }
+  if (status.status === "consent_required")
+    return "O escopo de uso do plano não foi concedido. Refaça o OAuth e autorize o uso.";
+  return "Assistente não conectado. Um administrador pode concluir o OAuth local com assistant_oauth.";
+}
+
+function show(value: unknown) {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+    ? String(value)
+    : JSON.stringify(value);
+}
+
 export default function Assistant({
   householdId,
   role,
+  compact = false,
 }: {
   householdId: string;
   role: string;
+  /** Starts folded to one row so it does not crowd the first screen. */
+  compact?: boolean;
 }) {
+  const [open, setOpen] = useState(!compact);
   const [status, setStatus] = useState<Status | null>(null);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<"text" | "label">("label");
+  const [image, setImage] = useState<File | null>(null);
   const [imageData, setImageData] = useState("");
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void fetch(`${API}/assistant/status`, { credentials: "include" })
-      .then((response) => response.json())
+    request<Status>("/assistant/status")
       .then(setStatus)
       .catch(() => setStatus({ enabled: false, connected: false }));
   }, []);
+
+  function pick(file: File | null) {
+    setError("");
+    setImage(null);
+    setImageData("");
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024 || !IMAGE_TYPES.includes(file.type)) {
+      setError("Use uma imagem JPEG, PNG ou WebP de até 5 MB.");
+      return;
+    }
+    setImage(file);
+    const reader = new FileReader();
+    reader.onload = () => setImageData(String(reader.result));
+    reader.readAsDataURL(file);
+  }
 
   async function submit() {
     setBusy(true);
     setError("");
     setResult(null);
     try {
-      const csrfResponse = await fetch(`${API}/auth/csrf`, {
-        credentials: "include",
-      });
-      const csrf = (await csrfResponse.json()).csrfToken;
-      const response = await fetch(
-        `${API}/households/${householdId}/assistant`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
-          body: JSON.stringify({
-            text,
-            mode,
-            ...(imageData ? { image_data: imageData } : {}),
-          }),
-        },
+      setResult(
+        await send<Result>(`/households/${householdId}/assistant`, {
+          text,
+          mode,
+          ...(imageData ? { image_data: imageData } : {}),
+        }),
       );
-      const payload = await response.json();
-      if (!response.ok)
-        throw new Error(
-          payload.detail ?? "Não foi possível concluir a análise.",
-        );
-      setResult(payload);
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Assistente indisponível.",
-      );
+      setError(reason(cause, "Não foi possível concluir a análise."));
     } finally {
       setBusy(false);
     }
   }
 
+  const connected = Boolean(status?.connected);
   return (
-    <section aria-labelledby="assistant-title" className="assistant-card">
-      <h2 id="assistant-title">Assistente da casa</h2>
-      <p>
-        {status?.connected
-          ? "Conectado à sua conta ChatGPT"
-          : status?.configuration === "disabled"
-            ? "Assistente desativado. Configure ASSISTANT_ENABLED=true e uma chave Fernet válida em ASSISTANT_ENCRYPTION_KEY."
-            : status?.configuration === "missing_or_invalid_encryption_key"
-              ? "Assistente indisponível: ASSISTANT_ENCRYPTION_KEY precisa ser uma chave Fernet válida."
-              : status?.configuration === "credential_unavailable"
-                ? "As credenciais não podem ser decifradas. Verifique se ASSISTANT_ENCRYPTION_KEY corresponde à chave usada na importação."
-                : status?.status === "consent_required"
-                  ? "O escopo de uso do plano não foi concedido. Refaça o OAuth e autorize o uso."
-                  : "Assistente não conectado. Um administrador pode concluir o OAuth local com assistant_oauth."}
-      </p>
-      {status?.connected && (
-        <a
+    <section aria-labelledby="assistant-title" className="tile assistant">
+      <div className="tile-head">
+        <TileMark motif="olho" size={28} />
+        <Title order={2} id="assistant-title">
+          Assistente da casa
+        </Title>
+        <Badge variant="dot" color={connected ? "azulejo" : "gray"} ml="auto">
+          {connected ? "Ativo" : "Inativo"}
+        </Badge>
+      </div>
+      <Text size="sm" c="dimmed" className="assistant-status">
+        {statusText(status)}
+      </Text>
+      {connected && (
+        <Anchor
           href="https://chatgpt.com/settings/usage"
           target="_blank"
           rel="noreferrer"
+          size="sm"
+          className="assistant-usage"
         >
-          Consultar uso e limites no ChatGPT
-        </a>
+          Consultar uso e limites no ChatGPT{" "}
+          <IconExternalLink size={14} aria-hidden="true" />
+        </Anchor>
       )}
-      {status?.connected && role !== "viewer" && (
-        <>
-          <label htmlFor="assistant-prompt">Pergunta</label>
-          <label htmlFor="assistant-mode">Tipo de resposta</label>
-          <select
-            id="assistant-mode"
-            value={mode}
-            onChange={(event) =>
-              setMode(event.target.value as "text" | "label")
-            }
+      {connected && role !== "viewer" && compact && (
+        <Group>
+          <Button
+            variant="light"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
           >
-            <option value="text">Resposta em texto</option>
-            <option value="label">Candidatos de etiqueta</option>
-          </select>
-          <textarea
+            {open ? "Fechar assistente" : "Abrir assistente"}
+          </Button>
+        </Group>
+      )}
+      {connected && role !== "viewer" && open && (
+        <div className="assistant-form">
+          <Textarea
             id="assistant-prompt"
+            label="Pergunta"
             value={text}
             maxLength={4000}
-            onChange={(event) => setText(event.target.value)}
+            autosize
+            minRows={2}
+            maxRows={6}
+            onChange={(event) => setText(event.currentTarget.value)}
             placeholder="Descreva o produto ou peça ajuda"
           />
-          <label htmlFor="assistant-image">
-            Foto opcional de etiqueta (máx. 5 MiB)
-          </label>
-          <input
-            id="assistant-image"
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return setImageData("");
-              if (
-                file.size > 5 * 1024 * 1024 ||
-                !["image/jpeg", "image/png", "image/webp"].includes(file.type)
-              ) {
-                setError("Use uma imagem JPEG, PNG ou WebP de até 5 MiB.");
-                event.target.value = "";
-                return;
+          <div className="assistant-options">
+            <NativeSelect
+              id="assistant-mode"
+              label="Tipo de resposta"
+              value={mode}
+              onChange={(event) =>
+                setMode(event.currentTarget.value as "text" | "label")
               }
-              const reader = new FileReader();
-              reader.onload = () => setImageData(String(reader.result));
-              reader.readAsDataURL(file);
-            }}
-          />
-          <button disabled={busy || !text.trim()} onClick={() => void submit()}>
-            {busy ? "Analisando…" : "Analisar"}
-          </button>
-        </>
-      )}
-      {error && <p role="alert">{error}</p>}
-      {result && (
-        <div role="status">
-          <p>{result.text}</p>
-          {result.candidates && (
-            <pre>{JSON.stringify(result.candidates, null, 2)}</pre>
-          )}
-          {result.requires_confirmation ? (
-            <strong>
-              Confirme antes de salvar. Nenhuma alteração foi feita.
-            </strong>
-          ) : (
-            <small>Nenhuma alteração foi feita.</small>
-          )}
+              data={[
+                { value: "label", label: "Candidatos de etiqueta" },
+                { value: "text", label: "Resposta em texto" },
+              ]}
+            />
+            <FileInput
+              id="assistant-image"
+              label="Foto opcional de etiqueta (máx. 5 MB)"
+              placeholder="Escolher foto"
+              accept={IMAGE_TYPES.join(",")}
+              value={image}
+              onChange={pick}
+              clearable
+              leftSection={<IconPhoto size={16} aria-hidden="true" />}
+            />
+          </div>
+          <Group>
+            <Button
+              onClick={() => void submit()}
+              disabled={!text.trim()}
+              loading={busy}
+              leftSection={<IconSparkles size={16} aria-hidden="true" />}
+            >
+              Analisar
+            </Button>
+          </Group>
         </div>
       )}
+      {error && <ErrorNote>{error}</ErrorNote>}
+      <AnimatePresence>
+        {result && (
+          <motion.div
+            role="status"
+            className="assistant-result"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+          >
+            <Text>{result.text}</Text>
+            {result.candidates && (
+              <dl className="candidates">
+                {Object.entries(result.candidates).map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{key}</dt>
+                    <dd>{show(value)}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {result.requires_confirmation ? (
+              <Text fw={700} size="sm" className="assistant-confirm">
+                Confirme antes de salvar. Nenhuma alteração foi feita.
+              </Text>
+            ) : (
+              <Text size="sm" c="dimmed">
+                Nenhuma alteração foi feita.
+              </Text>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   );
 }

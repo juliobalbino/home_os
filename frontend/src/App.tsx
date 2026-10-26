@@ -1,431 +1,113 @@
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
-import Finance from "./modules/finance/Finance";
-import Shopping from "./modules/shopping/Shopping";
+import { useCallback, useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { AuthScreen } from "./auth/AuthScreen";
+import { HouseholdPage } from "./household/HouseholdPage";
+import { Onboarding } from "./household/Onboarding";
+import { list, request, send } from "./lib/api";
+import type { Household, User } from "./lib/api";
+import { useRoute } from "./lib/route";
+import Assistant from "./modules/assistant/Assistant";
 import Chores from "./modules/chores/Chores";
 import Dashboard from "./modules/dashboard/Dashboard";
-import Assistant from "./modules/assistant/Assistant";
+import Finance from "./modules/finance/Finance";
+import Shopping from "./modules/shopping/Shopping";
+import { AppFrame } from "./shell/AppFrame";
+import { TileMark } from "./ui/Tile";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
-type User = { id: number; email: string; name: string };
-type Household = { id: string; name: string; role: string; timezone?: string };
-
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API}${url}`, {
-    credentials: "include",
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const details = Object.values(data).flat().join(" ");
-    throw new Error(data.detail ?? details ?? "Falha na solicitação.");
-  }
-  return data as T;
-}
-
-async function csrfHeaders() {
-  const result = await request<{ csrfToken: string }>("/auth/csrf");
-  return { "X-CSRFToken": result.csrfToken };
-}
+type Session =
+  | { state: "loading" }
+  | { state: "anonymous" }
+  | { state: "ready"; user: User; houses: Household[] };
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [houses, setHouses] = useState<Household[]>([]);
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [inviteToken, setInviteToken] = useState("");
-  const [acceptToken, setAcceptToken] = useState("");
-  const [financeHousehold, setFinanceHousehold] = useState("");
-  const [shoppingHousehold, setShoppingHousehold] = useState("");
-  const [choresHousehold, setChoresHousehold] = useState("");
-  const [dashboardHousehold, setDashboardHousehold] = useState("");
+  const [session, setSession] = useState<Session>({ state: "loading" });
+  const route = useRoute();
 
-  useEffect(() => {
-    const openModule = (event: Event) => {
-      const moduleName = (event as CustomEvent<string>).detail;
-      if (moduleName === "finance") setFinanceHousehold(dashboardHousehold);
-      if (moduleName === "shopping") setShoppingHousehold(dashboardHousehold);
-      if (moduleName === "chores") setChoresHousehold(dashboardHousehold);
-    };
-    window.addEventListener("home-os:open", openModule);
-    return () => window.removeEventListener("home-os:open", openModule);
-  }, [dashboardHousehold]);
-
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
-      const current = await request<User>("/me");
-      setUser(current);
-      setHouses(await request<Household[]>("/households"));
+      const user = await request<User>("/me");
+      const houses = list<Household>(await request<Household[]>("/households"));
+      setSession({ state: "ready", user, houses });
     } catch {
-      setUser(null);
-      setHouses([]);
+      setSession({ state: "anonymous" });
     }
-  }
-  useEffect(() => {
-    void refresh();
   }, []);
 
-  async function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage("");
-    const submitted = Object.fromEntries(new FormData(event.currentTarget));
-    if (
-      mode === "register" &&
-      !/^[A-Za-z0-9]{6,}$/.test(String(submitted.password ?? ""))
-    ) {
-      setMessage(
-        "A senha deve ter pelo menos 6 caracteres, usando apenas letras e números.",
-      );
-      return;
-    }
-    setBusy(true);
-    const values = submitted;
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function signOut() {
     try {
-      const headers = await csrfHeaders();
-      if (mode === "register")
-        await request("/auth/register", {
-          method: "POST",
-          headers,
-          body: JSON.stringify(values),
-        });
-      else
-        await request("/auth/login", {
-          method: "POST",
-          headers,
-          body: JSON.stringify(values),
-        });
-      await refresh();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Não foi possível entrar.",
-      );
+      await send("/auth/logout", {});
     } finally {
-      setBusy(false);
+      setSession({ state: "anonymous" });
+      window.location.hash = "";
     }
   }
 
-  async function createHouse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    const form = event.currentTarget;
-    const name = new FormData(form).get("name");
-    try {
-      const headers = await csrfHeaders();
-      await request("/households", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ name }),
-      });
-      form.reset();
-      await refresh();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Falha ao criar residência.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  if (session.state === "loading")
+    return (
+      <div className="splash" role="status">
+        <TileMark motif="estrela" size={56} className="splash-mark" />
+        <span className="sr-only">Carregando o Home OS…</span>
+      </div>
+    );
+  if (session.state === "anonymous") return <AuthScreen onSignedIn={refresh} />;
 
-  async function logout() {
-    const headers = await csrfHeaders();
-    await request("/auth/logout", { method: "POST", headers, body: "{}" });
-    setUser(null);
-    setHouses([]);
-  }
-
-  async function issueInvitation(householdId: string) {
-    setBusy(true);
-    setMessage("");
-    try {
-      const headers = await csrfHeaders();
-      const result = await request<{ token: string }>(
-        `/households/${householdId}/invitations`,
-        { method: "POST", headers, body: JSON.stringify({ role: "member" }) },
-      );
-      setInviteToken(result.token);
-      setMessage(
-        "Convite criado. Compartilhe este token; ele pode ser usado uma única vez.",
-      );
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Falha ao criar convite.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function acceptInvitation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    try {
-      const headers = await csrfHeaders();
-      await request(
-        `/invitations/${encodeURIComponent(acceptToken.trim())}/accept`,
-        { method: "POST", headers, body: "{}" },
-      );
-      setAcceptToken("");
-      setInviteToken("");
-      setMessage("Convite aceito.");
-      await refresh();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Falha ao aceitar convite.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { user, houses } = session;
+  // The backend allows one active membership per person.
+  const house = houses[0];
+  if (!house)
+    return (
+      <Onboarding
+        user={user}
+        onJoined={refresh}
+        onSignOut={() => void signOut()}
+      />
+    );
 
   return (
-    <main className="shell app-shell">
-      <header className="topbar">
-        <div className="eyebrow">HOME OS · ESPAÇO COMPARTILHADO</div>
-        {user && (
-          <button className="quiet" onClick={() => void logout()}>
-            Sair
-          </button>
-        )}
-      </header>
-      {!user ? (
-        <section className="auth-card">
-          <h1>
-            {mode === "login"
-              ? "Bem-vindo de volta."
-              : "Comece pela sua conta."}
-          </h1>
-          <p className="intro">
-            Organize a vida da casa junto com quem mora com você.
-          </p>
-          <form onSubmit={submitAuth} className="form-stack">
-            {mode === "register" && (
-              <label>
-                Nome
-                <input
-                  name="name"
-                  autoComplete="name"
-                  required
-                  maxLength={150}
-                />
-              </label>
-            )}
-            <label>
-              Email
-              <input name="email" type="email" autoComplete="email" required />
-            </label>
-            <label>
-              Senha
-              <input
-                name="password"
-                type="password"
-                autoComplete={
-                  mode === "login" ? "current-password" : "new-password"
-                }
-                required
-                minLength={mode === "register" ? 6 : undefined}
-                pattern={mode === "register" ? "[A-Za-z0-9]+" : undefined}
-              />
-              {mode === "register" && (
-                <small>
-                  Use pelo menos 6 caracteres, somente letras e números.
-                </small>
-              )}
-            </label>
-            <button disabled={busy}>
-              {busy ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}
-            </button>
-          </form>
-          <button
-            className="link-button"
-            onClick={() => {
-              setMode(mode === "login" ? "register" : "login");
-              setMessage("");
-            }}
-          >
-            {mode === "login" ? "Criar uma conta" : "Já tenho uma conta"}
-          </button>
-        </section>
-      ) : shoppingHousehold &&
-        houses.some((house) => house.id === shoppingHousehold) ? (
-        <section>
-          <button className="quiet" onClick={() => setShoppingHousehold("")}>
-            Voltar ao início
-          </button>
-          <Shopping
-            householdId={shoppingHousehold}
-            role={houses.find((house) => house.id === shoppingHousehold)!.role}
-          />
-        </section>
-      ) : choresHousehold &&
-        houses.some((house) => house.id === choresHousehold) ? (
-        <section>
-          <button className="quiet" onClick={() => setChoresHousehold("")}>
-            Voltar ao início
-          </button>
-          <Chores
-            householdId={choresHousehold}
-            role={houses.find((house) => house.id === choresHousehold)!.role}
-            timezone={
-              houses.find((house) => house.id === choresHousehold)!.timezone
-            }
-          />
-        </section>
-      ) : financeHousehold &&
-        houses.some((house) => house.id === financeHousehold) ? (
-        <section>
-          <button className="quiet" onClick={() => setFinanceHousehold("")}>
-            Voltar ao início
-          </button>
-          <Finance
-            householdId={financeHousehold}
-            role={houses.find((house) => house.id === financeHousehold)!.role}
-          />
-        </section>
-      ) : dashboardHousehold &&
-        houses.some((house) => house.id === dashboardHousehold) ? (
-        <section>
-          <button className="quiet" onClick={() => setDashboardHousehold("")}>
-            Voltar às residências
-          </button>
-          <Dashboard
-            householdId={dashboardHousehold}
-            householdName={
-              houses.find((house) => house.id === dashboardHousehold)!.name
-            }
-          />
-          <Assistant
-            householdId={dashboardHousehold}
-            role={houses.find((house) => house.id === dashboardHousehold)!.role}
-          />
-        </section>
-      ) : (
-        <section>
-          <p className="eyebrow">OLÁ, {user.name.toLocaleUpperCase("pt-BR")}</p>
-          <h1>Sua casa, em harmonia.</h1>
-          <p className="intro">
-            Residências compartilhadas com segurança e simplicidade.
-          </p>
-          <div className="section-heading">
-            <h2>Suas residências</h2>
-            <span>{houses.length}</span>
-          </div>
-          {houses.length ? (
-            <div className="house-list">
-              {houses.map((house) => (
-                <article className="house-card" key={house.id}>
-                  <div>
-                    <h3>{house.name}</h3>
-                    <button onClick={() => setDashboardHousehold(house.id)}>
-                      Abrir painel da residência
-                    </button>
-                    <button onClick={() => setFinanceHousehold(house.id)}>
-                      Abrir finanças
-                    </button>
-                    <button onClick={() => setShoppingHousehold(house.id)}>
-                      Abrir compras e estoque
-                    </button>
-                    <button onClick={() => setChoresHousehold(house.id)}>
-                      Abrir tarefas e rotinas
-                    </button>
-                    <p>
-                      Seu papel:{" "}
-                      {house.role === "owner"
-                        ? "responsável"
-                        : house.role === "viewer"
-                          ? "visualização"
-                          : "membro"}
-                    </p>
-                    {house.role === "owner" && (
-                      <button
-                        className="quiet"
-                        disabled={busy}
-                        onClick={() => void issueInvitation(house.id)}
-                      >
-                        Criar convite
-                      </button>
-                    )}
-                  </div>
-                  <span aria-hidden="true">⌂</span>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p className="empty">
-              Ainda não há residências. Crie a primeira para começar.
-            </p>
+    <AppFrame route={route} household={house} user={user}>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={route}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, transition: { duration: 0.08 } }}
+          transition={{ duration: 0.2, ease: [0.2, 0.9, 0.3, 1] }}
+        >
+          {route === "painel" && (
+            <Dashboard
+              householdId={house.id}
+              householdName={house.name}
+              role={house.role}
+            >
+              <Assistant householdId={house.id} role={house.role} compact />
+            </Dashboard>
           )}
-          {!houses.length && (
-            <form onSubmit={createHouse} className="create-house">
-              <label htmlFor="house-name">Criar residência</label>
-              <div>
-                <input
-                  id="house-name"
-                  name="name"
-                  placeholder="Ex.: Casa da família"
-                  maxLength={120}
-                  required
-                />
-                <button disabled={busy}>Criar</button>
-              </div>
-            </form>
+          {route === "financas" && (
+            <Finance householdId={house.id} role={house.role} />
           )}
-          {houses.length > 0 && (
-            <p className="empty">
-              Você já participa de uma residência. Para participar de outra,
-              será necessário sair da atual.
-            </p>
+          {route === "compras" && (
+            <Shopping householdId={house.id} role={house.role} />
           )}
-          {inviteToken && (
-            <div className="invite-token" role="status">
-              <label htmlFor="issued-invite-token">
-                Token do convite (expira em 7 dias)
-              </label>
-              <div>
-                <input
-                  id="issued-invite-token"
-                  readOnly
-                  value={inviteToken}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-                <button
-                  onClick={() =>
-                    void navigator.clipboard.writeText(inviteToken)
-                  }
-                >
-                  Copiar token
-                </button>
-              </div>
-              <small>
-                Compartilhe somente com a pessoa convidada; o token pode ser
-                usado uma vez.
-              </small>
-            </div>
+          {route === "tarefas" && (
+            <Chores
+              householdId={house.id}
+              role={house.role}
+              timezone={house.timezone}
+            />
           )}
-          <form onSubmit={acceptInvitation} className="create-house">
-            <label htmlFor="invite-token">Aceitar convite</label>
-            <div>
-              <input
-                id="invite-token"
-                value={acceptToken}
-                onChange={(event) => setAcceptToken(event.target.value)}
-                required
-                placeholder="Cole o token recebido"
-              />
-              <button disabled={busy || !acceptToken.trim()}>Aceitar</button>
-            </div>
-          </form>
-        </section>
-      )}
-      {message && (
-        <p role="alert" className="message">
-          {message}
-        </p>
-      )}
-    </main>
+          {route === "casa" && (
+            <HouseholdPage
+              household={house}
+              user={user}
+              onSignOut={() => void signOut()}
+            />
+          )}
+        </motion.div>
+      </AnimatePresence>
+    </AppFrame>
   );
 }
