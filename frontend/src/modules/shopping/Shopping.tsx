@@ -1,7 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  NativeSelect,
+  Text,
+  TextInput,
+} from "@mantine/core";
+import { IconPlus, IconReceipt, IconTrash } from "@tabler/icons-react";
+import { list, reason, request, send } from "../../lib/api";
+import { currencyToMinor, localDay, money, quantity } from "../../lib/format";
+import { useToast } from "../../ui/Toaster";
+import { SectionNav } from "../../ui/SectionNav";
+import {
+  EmptyState,
+  ErrorNote,
+  FlipTile,
+  Loading,
+  PageHeader,
+  TileSection,
+} from "../../ui/parts";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 type Product = {
   id: number;
   name: string;
@@ -17,7 +37,7 @@ type Item = {
   unit: string;
   status: string;
 };
-type List = { id: number; name: string; status: string; items: Item[] };
+type ShoppingList = { id: number; name: string; status: string; items: Item[] };
 type Stock = {
   product_id: number;
   name: string;
@@ -26,35 +46,34 @@ type Stock = {
 };
 type ReceiptRow = { product_id: string; quantity: string; price: string };
 
-function currencyToMinor(text: string): number {
-  const match = text.trim().match(/^(\d+)(?:[,.](\d{1,2}))?$/);
-  if (!match)
-    throw new Error("Informe um preço válido com até duas casas decimais.");
-  const cents =
-    BigInt(match[1]) * 100n + BigInt((match[2] ?? "").padEnd(2, "0") || "0");
-  if (
-    cents <= 0n ||
-    cents > 9223372036854775807n ||
-    cents > BigInt(Number.MAX_SAFE_INTEGER)
-  )
-    throw new Error("Preço fora do limite permitido.");
-  return Number(cents);
-}
+const blankRow = (): ReceiptRow => ({
+  product_id: "",
+  quantity: "1",
+  price: "",
+});
+const ITEM_STATUS: Record<string, string> = {
+  needed: "Falta comprar",
+  purchased: "Comprado",
+  skipped: "Ignorado",
+};
+const LIST_STATUS: Record<string, string> = {
+  active: "ativa",
+  archived: "arquivada",
+  completed: "concluída",
+};
 
-async function call<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
-    credentials: "include",
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  const data = await response.json();
-  if (!response.ok)
-    throw new Error(
-      data.detail ??
-        Object.values(data).flat().join(" ") ??
-        "Falha na solicitação.",
-    );
-  return data as T;
+function receiptTotal(rows: ReceiptRow[]) {
+  let total = 0;
+  for (const row of rows) {
+    const amount = Number(row.quantity.replace(",", "."));
+    try {
+      if (!Number.isFinite(amount) || amount <= 0) return null;
+      total += Math.round(amount * currencyToMinor(row.price));
+    } catch {
+      return null;
+    }
+  }
+  return total;
 }
 
 export default function Shopping({
@@ -65,39 +84,43 @@ export default function Shopping({
   role: string;
 }) {
   const [products, setProducts] = useState<Product[]>([]);
-  const [lists, setLists] = useState<List[]>([]);
+  const [lists, setLists] = useState<ShoppingList[]>([]);
   const [stock, setStock] = useState<Stock[]>([]);
   const [selected, setSelected] = useState("");
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const [receiptRows, setReceiptRows] = useState<ReceiptRow[]>([
-    { product_id: "", quantity: "1", price: "" },
-  ]);
+  const [rows, setRows] = useState<ReceiptRow[]>([blankRow()]);
   const readOnly = role === "viewer";
   const pendingPurchase = useRef<{ payload: string; key: string } | null>(null);
+  const toast = useToast();
 
   const refresh = useCallback(async () => {
-    setBusy(true);
     setError("");
     try {
-      const [p, l, s] = await Promise.all([
-        call<Product[]>(`/households/${householdId}/products`),
-        call<List[]>(`/households/${householdId}/shopping-lists`),
-        call<Stock[]>(`/households/${householdId}/inventory`),
+      const [productRows, listRows, stockRows] = await Promise.all([
+        request<Product[]>(`/households/${householdId}/products`),
+        request<ShoppingList[]>(`/households/${householdId}/shopping-lists`),
+        request<Stock[]>(`/households/${householdId}/inventory`),
       ]);
-      setProducts(p);
-      setLists(l);
-      setStock(s);
-      if (!selected && l.length) setSelected(String(l[0].id));
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Não foi possível carregar os dados.",
+      const nextLists = list<ShoppingList>(listRows);
+      setProducts(list<Product>(productRows));
+      setLists(nextLists);
+      setStock(list<Stock>(stockRows));
+      setSelected((current) =>
+        current && nextLists.some((entry) => String(entry.id) === current)
+          ? current
+          : nextLists[0]
+            ? String(nextLists[0].id)
+            : "",
       );
+    } catch (cause) {
+      setError(reason(cause, "Não foi possível carregar os dados."));
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
-  }, [householdId, selected]);
+  }, [householdId]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -111,421 +134,486 @@ export default function Shopping({
     event.preventDefault();
     const form = event.currentTarget;
     setError("");
-    setMessage("");
     try {
-      const csrf = await call<{ csrfToken: string }>("/auth/csrf");
-      await call(path, {
-        method: "POST",
-        headers: { "X-CSRFToken": csrf.csrfToken },
-        body: JSON.stringify(build(new FormData(form))),
-      });
+      await send(path, build(new FormData(form)));
       form.reset();
-      setMessage(success);
+      toast.success(success);
       await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao salvar.");
+    } catch (cause) {
+      setError(reason(cause, "Falha ao salvar."));
     }
+  }
+
+  async function updateListItem(itemId: number, status: string) {
+    setError("");
+    setLists((current) =>
+      current.map((entry) => ({
+        ...entry,
+        items: entry.items.map((item) =>
+          item.id === itemId ? { ...item, status } : item,
+        ),
+      })),
+    );
+    try {
+      await send(`/shopping-items/${itemId}`, { status }, "PATCH");
+      toast.success(
+        status === "purchased"
+          ? "Item marcado como comprado."
+          : "Item ignorado.",
+      );
+    } catch (cause) {
+      setError(reason(cause, "Falha ao atualizar o item."));
+    }
+    await refresh();
   }
 
   async function confirmPurchase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const purchasePayload = {
-      purchased_at: (() => {
-        const now = new Date();
-        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      })(),
-      store_name: data.get("store_name"),
-      items: receiptRows.map((row, index) => ({
-        product_id: Number(row.product_id),
-        quantity: row.quantity,
-        unit: String(data.get(`unit-${index}`)),
-        unit_price_minor: currencyToMinor(row.price),
-      })),
-    };
-    const encodedPayload = JSON.stringify(purchasePayload);
-    if (
-      !pendingPurchase.current ||
-      pendingPurchase.current.payload !== encodedPayload
-    )
-      pendingPurchase.current = {
-        payload: encodedPayload,
-        key: crypto.randomUUID(),
-      };
-    setBusy(true);
     setError("");
+    let encoded: string;
     try {
-      const csrf = await call<{ csrfToken: string }>("/auth/csrf");
-      const response = await call<{ id: number }>(
+      encoded = JSON.stringify({
+        purchased_at: localDay(),
+        store_name: data.get("store_name"),
+        items: rows.map((row, index) => ({
+          product_id: Number(row.product_id),
+          quantity: row.quantity,
+          unit: String(data.get(`unit-${index}`)),
+          unit_price_minor: currencyToMinor(row.price),
+        })),
+      });
+    } catch (cause) {
+      setError(reason(cause, "Confira os preços informados."));
+      return;
+    }
+    // Retries of the same receipt reuse the key so the server records it once.
+    if (pendingPurchase.current?.payload !== encoded)
+      pendingPurchase.current = { payload: encoded, key: crypto.randomUUID() };
+    setBusy(true);
+    try {
+      const response = await send<{ id: number }>(
         `/households/${householdId}/purchases`,
-        {
-          method: "POST",
-          headers: {
-            "X-CSRFToken": csrf.csrfToken,
-            "Idempotency-Key": pendingPurchase.current.key,
-          },
-          body: encodedPayload,
-        },
+        encoded,
+        "POST",
+        { "Idempotency-Key": pendingPurchase.current.key },
       );
       form.reset();
       pendingPurchase.current = null;
-      setReceiptRows([{ product_id: "", quantity: "1", price: "" }]);
-      setMessage(
+      setRows([blankRow()]);
+      toast.success(
         `Compra ${response.id} registrada; estoque e financeiro atualizados.`,
       );
       await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao confirmar a compra.");
+    } catch (cause) {
+      setError(reason(cause, "Falha ao confirmar a compra."));
     } finally {
       setBusy(false);
     }
   }
 
-  const list = lists.find((entry) => String(entry.id) === selected);
+  const setRow = (index: number, patch: Partial<ReceiptRow>) =>
+    setRows((current) =>
+      current.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    );
+  const active = lists.find((entry) => String(entry.id) === selected);
+  const needed =
+    active?.items.filter((item) => item.status === "needed").length ?? 0;
+  const total = receiptTotal(rows);
+
   return (
-    <section className="shopping-module" aria-labelledby="shopping-title">
-      <p className="eyebrow">COMPRAS · ESTOQUE</p>
-      <h1 id="shopping-title">Compras e estoque</h1>
-      {busy && <p role="status">Carregando…</p>}
-      {error && <p role="alert">{error}</p>}
-      {message && <p role="status">{message}</p>}
-      <div className="house-list">
-        <section className="house-card">
-          <div>
-            <h2>Catálogo</h2>
-            {products.length ? (
-              <ul>
-                {products.map((p) => (
-                  <li key={p.id}>
-                    {p.name} — {p.unit}
-                    {p.brand && ` · ${p.brand}`}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="empty">Nenhum produto cadastrado.</p>
-            )}
-            {!readOnly && (
-              <form
-                className="form-stack"
-                onSubmit={(e) =>
-                  void submit(
-                    e,
-                    `/households/${householdId}/products`,
-                    (d) => ({
-                      name: d.get("name"),
-                      brand: d.get("brand"),
-                      category: d.get("category"),
-                      unit: d.get("unit"),
-                    }),
-                    "Produto cadastrado.",
-                  )
-                }
-              >
-                <label>
-                  Nome
-                  <input name="name" required />
-                </label>
-                <label>
-                  Marca
-                  <input name="brand" />
-                </label>
-                <label>
-                  Categoria
-                  <input name="category" />
-                </label>
-                <label>
-                  Unidade
-                  <input name="unit" placeholder="un, kg, L…" required />
-                </label>
-                <button>Cadastrar produto</button>
-              </form>
-            )}
-          </div>
-        </section>
-        <section className="house-card">
-          <div>
-            <h2>Listas compartilhadas</h2>
-            {lists.length ? (
-              <>
-                <label>
-                  Lista
-                  <select
+    <div className="page">
+      <PageHeader motif="flor" title="Compras e estoque" id="shopping-title">
+        {active
+          ? `${active.name}: ${needed} ${needed === 1 ? "item falta" : "itens faltam"}`
+          : "Listas, compras e despensa"}
+      </PageHeader>
+      <SectionNav
+        label="Seções de compras"
+        sections={[
+          { id: "listas", label: "Lista" },
+          ...(readOnly ? [] : [{ id: "compra", label: "Compra" }]),
+          { id: "estoque", label: "Estoque" },
+          { id: "catalogo", label: "Catálogo" },
+        ]}
+      />
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {loading ? (
+        <div className="tile-wall">
+          <section className="tile">
+            <Loading label="Carregando…" lines={4} />
+          </section>
+        </div>
+      ) : (
+        <div className="tile-wall module-grid">
+          <div className="col">
+            <TileSection title="Listas compartilhadas" id="listas" order={1}>
+              {lists.length ? (
+                <>
+                  <NativeSelect
+                    label="Lista"
                     value={selected}
-                    onChange={(e) => setSelected(e.target.value)}
-                  >
-                    {lists.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name} · {l.status}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <ul>
-                  {list?.items.map((item) => (
-                    <li key={item.id}>
-                      {item.name} — {item.quantity} {item.unit} · {item.status}
-                      {!readOnly && item.status === "needed" && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void updateListItem(item.id, "purchased")
-                            }
-                          >
-                            Marcar comprado
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void updateListItem(item.id, "skipped")
-                            }
-                          >
-                            Ignorar item
-                          </button>
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {!list?.items.length && (
-                  <p className="empty">Esta lista ainda não tem itens.</p>
-                )}
-              </>
-            ) : (
-              <p className="empty">Nenhuma lista criada.</p>
-            )}
-            {!readOnly && (
-              <>
+                    onChange={(event) => setSelected(event.currentTarget.value)}
+                    data={lists.map((entry) => ({
+                      value: String(entry.id),
+                      label: `${entry.name} · ${LIST_STATUS[entry.status] ?? entry.status}`,
+                    }))}
+                    mb="sm"
+                  />
+                  {active?.items.length ? (
+                    <ul className="rows">
+                      {active.items.map((item) => (
+                        <li
+                          key={item.id}
+                          className="row"
+                          data-done={item.status !== "needed" || undefined}
+                        >
+                          <FlipTile
+                            done={item.status === "purchased"}
+                            motif="flor"
+                          />
+                          <span className="row-main">
+                            <span className="row-title">{item.name}</span>
+                            <span className="row-meta">
+                              {quantity(item.quantity)} {item.unit}
+                            </span>
+                          </span>
+                          {!readOnly && item.status === "needed" ? (
+                            <span className="row-actions">
+                              <Button
+                                size="sm"
+                                variant="light"
+                                onClick={() =>
+                                  void updateListItem(item.id, "purchased")
+                                }
+                              >
+                                Marcar comprado
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="subtle"
+                                color="gray"
+                                onClick={() =>
+                                  void updateListItem(item.id, "skipped")
+                                }
+                              >
+                                Ignorar item
+                              </Button>
+                            </span>
+                          ) : (
+                            <Badge
+                              variant="light"
+                              color={
+                                item.status === "purchased" ? "azulejo" : "gray"
+                              }
+                            >
+                              {ITEM_STATUS[item.status] ?? item.status}
+                            </Badge>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState>Esta lista ainda não tem itens.</EmptyState>
+                  )}
+                </>
+              ) : (
+                <EmptyState>Nenhuma lista criada.</EmptyState>
+              )}
+              {!readOnly && active && (
                 <form
-                  className="create-house"
-                  onSubmit={(e) =>
+                  className="add-item"
+                  onSubmit={(event) =>
                     void submit(
-                      e,
+                      event,
+                      `/shopping-lists/${active.id}/items`,
+                      (data) => ({
+                        product_id: data.get("product_id") || null,
+                        free_text_name: data.get("free_text_name"),
+                        quantity: data.get("quantity"),
+                        unit: data.get("unit"),
+                      }),
+                      "Item adicionado.",
+                    )
+                  }
+                >
+                  <Text fw={700} size="sm" className="add-item-title">
+                    Adicionar à lista
+                  </Text>
+                  <NativeSelect
+                    label="Produto do catálogo"
+                    name="product_id"
+                    data={[
+                      { value: "", label: "Item livre" },
+                      ...products.map((product) => ({
+                        value: String(product.id),
+                        label: product.name,
+                      })),
+                    ]}
+                  />
+                  <TextInput
+                    label="Nome livre (se aplicável)"
+                    name="free_text_name"
+                  />
+                  <div className="pair">
+                    <TextInput
+                      label="Quantidade"
+                      name="quantity"
+                      type="number"
+                      min="0.0001"
+                      step="0.0001"
+                      defaultValue="1"
+                      required
+                    />
+                    <TextInput
+                      label="Unidade"
+                      name="unit"
+                      placeholder="un, kg, L…"
+                      required
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    variant="light"
+                    leftSection={<IconPlus size={16} aria-hidden="true" />}
+                  >
+                    Adicionar item
+                  </Button>
+                </form>
+              )}
+              {!readOnly && (
+                <form
+                  className="inline-form new-list"
+                  onSubmit={(event) =>
+                    void submit(
+                      event,
                       `/households/${householdId}/shopping-lists`,
-                      (d) => ({ name: d.get("name") }),
+                      (data) => ({ name: data.get("name") }),
                       "Lista criada.",
                     )
                   }
                 >
-                  <label>
-                    Nova lista
-                    <input name="name" required />
-                  </label>
-                  <button>Criar lista</button>
+                  <TextInput
+                    label="Nova lista"
+                    name="name"
+                    placeholder="Ex.: Feira de sábado"
+                    required
+                  />
+                  <Button type="submit" variant="default">
+                    Criar lista
+                  </Button>
                 </form>
-                {list && (
-                  <form
-                    className="form-stack"
-                    onSubmit={(e) =>
-                      void submit(
-                        e,
-                        `/shopping-lists/${list.id}/items`,
-                        (d) => ({
-                          product_id: d.get("product_id") || null,
-                          free_text_name: d.get("free_text_name"),
-                          quantity: d.get("quantity"),
-                          unit: d.get("unit"),
-                        }),
-                        "Item adicionado.",
-                      )
-                    }
-                  >
-                    <label>
-                      Produto
-                      <select name="product_id">
-                        <option value="">Item livre</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Nome livre (se aplicável)
-                      <input name="free_text_name" />
-                    </label>
-                    <label>
-                      Quantidade
-                      <input
-                        name="quantity"
-                        type="number"
-                        min="0.0001"
-                        step="0.0001"
-                        defaultValue="1"
-                        required
-                      />
-                    </label>
-                    <label>
-                      Unidade
-                      <input name="unit" required />
-                    </label>
-                    <button>Adicionar item</button>
-                  </form>
-                )}
-              </>
-            )}
+              )}
+            </TileSection>
+
+            <TileSection title="Saldo em estoque" id="estoque" order={3}>
+              {stock.length ? (
+                <ul className="rows rows-compact stock">
+                  {stock.map((entry) => (
+                    <li
+                      key={`${entry.product_id}-${entry.unit}`}
+                      className="row"
+                    >
+                      <span className="row-main">{entry.name}</span>
+                      <span className="amount">
+                        {quantity(entry.quantity)} <small>{entry.unit}</small>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState>
+                  Estoque vazio. Ele se enche quando uma compra é registrada.
+                </EmptyState>
+              )}
+            </TileSection>
           </div>
-        </section>
-        <section className="house-card">
-          <div>
-            <h2>Confirmar compra</h2>
-            <p>
-              O total será lançado uma vez nas finanças e os itens atualizarão o
-              estoque.
-            </p>
+
+          <div className="col">
             {!readOnly && (
-              <form
-                className="form-stack"
-                onSubmit={(e) => void confirmPurchase(e)}
-              >
-                {receiptRows.map((row, index) => (
-                  <fieldset key={index}>
-                    <legend>Item {index + 1}</legend>
-                    <label>
-                      Produto
-                      <select
+              <TileSection title="Confirmar compra" id="compra" order={2}>
+                <Text size="sm" c="dimmed" mb="sm">
+                  O total será lançado uma vez nas finanças e os itens
+                  atualizarão o estoque.
+                </Text>
+                <form
+                  className="stack"
+                  onSubmit={(event) => void confirmPurchase(event)}
+                >
+                  {rows.map((row, index) => (
+                    <fieldset key={index} className="receipt-row">
+                      <legend>Item {index + 1}</legend>
+                      <NativeSelect
+                        label="Produto"
                         required
                         value={row.product_id}
-                        onChange={(e) =>
-                          setReceiptRows((rows) =>
-                            rows.map((r, i) =>
-                              i === index
-                                ? { ...r, product_id: e.target.value }
-                                : r,
-                            ),
-                          )
+                        onChange={(event) =>
+                          setRow(index, {
+                            product_id: event.currentTarget.value,
+                          })
                         }
-                      >
-                        <option value="">Selecione</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Quantidade
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={row.quantity}
-                        onChange={(e) =>
-                          setReceiptRows((rows) =>
-                            rows.map((r, i) =>
-                              i === index
-                                ? { ...r, quantity: e.target.value }
-                                : r,
-                            ),
-                          )
-                        }
-                        required
+                        data={[
+                          { value: "", label: "Selecione" },
+                          ...products.map((product) => ({
+                            value: String(product.id),
+                            label: product.name,
+                          })),
+                        ]}
                       />
-                    </label>
-                    <label>
-                      Unidade
-                      <input
-                        name={`unit-${index}`}
-                        value={
-                          products.find((p) => String(p.id) === row.product_id)
-                            ?.unit ?? "un"
-                        }
-                        readOnly
-                        required
-                      />
-                    </label>
-                    <label>
-                      Preço unitário (R$)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={row.price}
-                        onChange={(e) =>
-                          setReceiptRows((rows) =>
-                            rows.map((r, i) =>
-                              i === index ? { ...r, price: e.target.value } : r,
-                            ),
-                          )
-                        }
-                        required
-                      />
-                    </label>
-                    {receiptRows.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setReceiptRows((rows) =>
-                            rows.filter((_, i) => i !== index),
-                          )
-                        }
-                      >
-                        Remover item
-                      </button>
-                    )}
-                  </fieldset>
-                ))}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setReceiptRows((rows) => [
-                      ...rows,
-                      { product_id: "", quantity: "1", price: "" },
-                    ])
+                      <div className="trio">
+                        <TextInput
+                          label="Quantidade"
+                          inputMode="decimal"
+                          value={row.quantity}
+                          onChange={(event) =>
+                            setRow(index, {
+                              quantity: event.currentTarget.value,
+                            })
+                          }
+                          required
+                        />
+                        <TextInput
+                          label="Unidade"
+                          name={`unit-${index}`}
+                          value={
+                            products.find(
+                              (product) =>
+                                String(product.id) === row.product_id,
+                            )?.unit ?? "un"
+                          }
+                          readOnly
+                          required
+                        />
+                        <TextInput
+                          label="Preço unitário (R$)"
+                          inputMode="decimal"
+                          placeholder="0,00"
+                          value={row.price}
+                          onChange={(event) =>
+                            setRow(index, { price: event.currentTarget.value })
+                          }
+                          required
+                        />
+                      </div>
+                      {rows.length > 1 && (
+                        <ActionIcon
+                          variant="subtle"
+                          color="barro"
+                          aria-label={`Remover item ${index + 1}`}
+                          className="receipt-remove"
+                          onClick={() =>
+                            setRows((current) =>
+                              current.filter((_, i) => i !== index),
+                            )
+                          }
+                        >
+                          <IconTrash size={16} />
+                        </ActionIcon>
+                      )}
+                    </fieldset>
+                  ))}
+                  <Button
+                    variant="subtle"
+                    leftSection={<IconPlus size={16} aria-hidden="true" />}
+                    onClick={() =>
+                      setRows((current) => [...current, blankRow()])
+                    }
+                  >
+                    Adicionar item
+                  </Button>
+                  <TextInput
+                    label="Loja"
+                    name="store_name"
+                    description="Opcional"
+                  />
+                  <div className="receipt-total" aria-live="polite">
+                    <span>Total</span>
+                    <strong className="amount">
+                      {total === null ? "—" : money(total)}
+                    </strong>
+                  </div>
+                  <Button
+                    type="submit"
+                    loading={busy}
+                    disabled={!products.length}
+                    leftSection={<IconReceipt size={16} aria-hidden="true" />}
+                  >
+                    Registrar compra
+                  </Button>
+                </form>
+              </TileSection>
+            )}
+
+            <TileSection title="Catálogo" id="catalogo" order={4}>
+              {products.length ? (
+                <ul className="rows rows-compact">
+                  {products.map((product) => (
+                    <li key={product.id} className="row">
+                      <span className="row-main">
+                        <span className="row-title">{product.name}</span>
+                        {(product.brand || product.category) && (
+                          <span className="row-meta">
+                            {[product.brand, product.category]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                        )}
+                      </span>
+                      <Badge variant="outline" color="gray" size="sm">
+                        {product.unit}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState>Nenhum produto cadastrado.</EmptyState>
+              )}
+              {!readOnly && (
+                <form
+                  className="stack catalog-form"
+                  onSubmit={(event) =>
+                    void submit(
+                      event,
+                      `/households/${householdId}/products`,
+                      (data) => ({
+                        name: data.get("name"),
+                        brand: data.get("brand"),
+                        category: data.get("category"),
+                        unit: data.get("unit"),
+                      }),
+                      "Produto cadastrado.",
+                    )
                   }
                 >
-                  Adicionar item
-                </button>
-                <label>
-                  Loja
-                  <input name="store_name" />
-                </label>
-                <button disabled={busy || !products.length}>
-                  Registrar compra
-                </button>
-              </form>
-            )}
+                  <TextInput label="Nome" name="name" required />
+                  <div className="pair">
+                    <TextInput
+                      label="Marca"
+                      name="brand"
+                      description="Opcional"
+                    />
+                    <TextInput
+                      label="Categoria"
+                      name="category"
+                      description="Opcional"
+                    />
+                  </div>
+                  <TextInput
+                    label="Unidade"
+                    name="unit"
+                    placeholder="un, kg, L…"
+                    required
+                  />
+                  <Button type="submit" variant="light">
+                    Cadastrar produto
+                  </Button>
+                </form>
+              )}
+            </TileSection>
           </div>
-        </section>
-        <section className="house-card">
-          <div>
-            <h2>Saldo em estoque</h2>
-            {stock.length ? (
-              <ul>
-                {stock.map((entry) => (
-                  <li key={`${entry.product_id}-${entry.unit}`}>
-                    {entry.name}: {entry.quantity} {entry.unit}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="empty">Estoque vazio.</p>
-            )}
-          </div>
-        </section>
-      </div>
-    </section>
+        </div>
+      )}
+    </div>
   );
-
-  async function updateListItem(itemId: number, status: string) {
-    setError("");
-    try {
-      const csrf = await call<{ csrfToken: string }>("/auth/csrf");
-      await call(`/shopping-items/${itemId}`, {
-        method: "PATCH",
-        headers: { "X-CSRFToken": csrf.csrfToken },
-        body: JSON.stringify({ status }),
-      });
-      setMessage(
-        status === "purchased"
-          ? "Item marcado como comprado."
-          : "Item ignorado.",
-      );
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao atualizar o item.");
-    }
-  }
 }

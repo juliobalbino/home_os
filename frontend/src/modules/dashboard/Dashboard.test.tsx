@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderWithProviders as render } from "../../test/render";
 import Dashboard from "./Dashboard";
 
 afterEach(() => {
