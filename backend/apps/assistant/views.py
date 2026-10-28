@@ -7,7 +7,7 @@ from apps.assistant.configuration import (
     assistant_is_ready,
 )
 from apps.assistant.models import ChatGPTConnection
-from apps.assistant.services import create_response
+from apps.assistant.services import create_response, disconnect_user
 from apps.households.permissions import require_membership
 
 
@@ -39,6 +39,9 @@ class AssistantStatusView(APIView):
             {
                 "enabled": assistant_is_ready(),
                 "connected": connected,
+                "can_disconnect": connections.exclude(
+                    credentials_ciphertext=""
+                ).exists(),
                 "status": "connected"
                 if connected
                 else (connection.status if connection else "not_connected"),
@@ -47,6 +50,13 @@ class AssistantStatusView(APIView):
                 else assistant_configuration_status(),
             }
         )
+
+
+class AssistantDisconnectView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response(disconnect_user(request.user))
 
 
 class AssistantRequestView(APIView):

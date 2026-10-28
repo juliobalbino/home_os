@@ -3,18 +3,20 @@ import os
 import tempfile
 import time
 import webbrowser
-import urllib.request
-import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.assistant.configuration import assistant_is_ready
 from apps.assistant.models import ChatGPTConnection, credential_cipher
-from apps.assistant.services import AUTH_BASE, exchange_and_validate, new_authorization
+from apps.assistant.services import (
+    exchange_and_validate,
+    new_authorization,
+    revoke_connection,
+)
 
 
 class Command(BaseCommand):
@@ -219,50 +221,9 @@ class Command(BaseCommand):
             connection = ChatGPTConnection.objects.get(
                 user_id=user_id, client_id=client_id
             )
-            credentials = connection.get_credentials()
         except Exception as exc:
             raise CommandError("The selected connection could not be loaded.") from exc
-        confirmed = False
-        try:
-            discovery_request = urllib.request.Request(
-                AUTH_BASE + "/.well-known/openid-configuration"
-            )
-            with urllib.request.urlopen(discovery_request, timeout=10) as response:
-                revocation_endpoint = json.loads(response.read(65536))[
-                    "revocation_endpoint"
-                ]
-            revoke_request = urllib.request.Request(
-                revocation_endpoint,
-                data=urlencode(
-                    {
-                        "token": credentials["refresh_token"],
-                        "token_type_hint": "refresh_token",
-                        "client_id": client_id,
-                    }
-                ).encode(),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            for attempt, delay in enumerate((0, 0.25, 0.75)):
-                if delay:
-                    time.sleep(delay)
-                try:
-                    with urllib.request.urlopen(revoke_request, timeout=15) as response:
-                        confirmed = response.status == 200
-                    if confirmed:
-                        break
-                except urllib.error.HTTPError as exc:
-                    if not 500 <= exc.code < 600:
-                        break
-                except (urllib.error.URLError, TimeoutError, OSError):
-                    if attempt == 2:
-                        break
-        except Exception:
-            pass
-        connection.credentials_ciphertext = ""
-        connection.status = "revoked" if confirmed else "revocation_unconfirmed"
-        connection.save(
-            update_fields=["credentials_ciphertext", "status", "updated_at"]
-        )
+        confirmed = revoke_connection(connection)
         if confirmed:
             self.stdout.write(
                 "ChatGPT renewable session revoked and local tokens cleared."

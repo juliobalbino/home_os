@@ -158,10 +158,6 @@ export function TileMark({
       style={style}
     >
       <defs>
-        <linearGradient id={`${id}-sheen`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#fff" stopOpacity="0.28" />
-          <stop offset="0.45" stopColor="#fff" stopOpacity="0" />
-        </linearGradient>
         <clipPath id={`${id}-clip`}>
           <rect width="40" height="40" rx="3" />
         </clipPath>
@@ -169,7 +165,6 @@ export function TileMark({
       <g clipPath={`url(#${id}-clip)`}>
         <rect width="40" height="40" fill={BASE} />
         <Figure motif={motif} />
-        <rect width="40" height="40" fill={`url(#${id}-sheen)`} />
       </g>
     </svg>
   );

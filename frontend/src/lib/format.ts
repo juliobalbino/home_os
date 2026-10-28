@@ -38,12 +38,29 @@ export function currencyToMinor(text: string): number {
   return Number(cents);
 }
 
-export function localDay(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+export const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
+
+function dateParts(date: Date, timeZone = DEFAULT_TIME_ZONE) {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(date)
+      .map(({ type, value }) => [type, value]),
+  );
 }
 
-export function localPeriod(date = new Date()) {
-  return localDay(date).slice(0, 7);
+export function localDay(date = new Date(), timeZone = DEFAULT_TIME_ZONE) {
+  const { year, month, day } = dateParts(date, timeZone);
+  return `${year}-${month}-${day}`;
+}
+
+export function localPeriod(date = new Date(), timeZone = DEFAULT_TIME_ZONE) {
+  const { year, month } = dateParts(date, timeZone);
+  return `${year}-${month}`;
 }
 
 export function dateTime(iso: string, timeZone?: string) {
@@ -62,11 +79,12 @@ export function monthName(period: string) {
   return `${name} de ${year}`;
 }
 
-export function today() {
+export function today(timeZone = DEFAULT_TIME_ZONE) {
   return new Intl.DateTimeFormat("pt-BR", {
     weekday: "long",
     day: "numeric",
     month: "long",
+    timeZone,
   }).format(new Date());
 }
 

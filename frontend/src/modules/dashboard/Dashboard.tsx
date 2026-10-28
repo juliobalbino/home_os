@@ -5,6 +5,7 @@ import { IconArrowRight } from "@tabler/icons-react";
 import { list, reason, request, send } from "../../lib/api";
 import type { Balance, Occurrence, Summary } from "../../lib/api";
 import {
+  DEFAULT_TIME_ZONE,
   dateTime,
   localPeriod,
   money,
@@ -108,11 +109,13 @@ export default function Dashboard({
   householdId,
   householdName,
   role,
+  timezone = DEFAULT_TIME_ZONE,
   children,
 }: {
   householdId: string;
   householdName: string;
   role?: string;
+  timezone?: string;
   children?: ReactNode;
 }) {
   const now = new Date();
@@ -130,7 +133,7 @@ export default function Dashboard({
       setActionError(reason(cause, "Não foi possível concluir a ação."));
     }
   }
-  const period = localPeriod(now);
+  const period = localPeriod(now, timezone);
   const finance = useSection(async () => {
     const [summary, balances] = await Promise.all([
       request<Summary>(
@@ -175,7 +178,7 @@ export default function Dashboard({
   return (
     <div className="page dashboard">
       <PageHeader motif="arcos" title={householdName} id="dashboard-title">
-        <span className="capitalize">{today()}</span>
+        <span className="capitalize">{today(timezone)}</span>
       </PageHeader>
 
       {actionError && <ErrorNote>{actionError}</ErrorNote>}
@@ -321,7 +324,9 @@ export default function Dashboard({
                   <li key={item.id} className="row">
                     <span className="row-main">
                       <span className="row-title">{item.title}</span>
-                      <span className="row-meta">{dateTime(item.due_at)}</span>
+                      <span className="row-meta">
+                        {dateTime(item.due_at, timezone)}
+                      </span>
                     </span>
                     {writable ? (
                       <Button

@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -31,6 +32,11 @@ REQUIRED_SCOPES = {
 }
 MAX_PROMPT = 4000
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class AssistantUnavailable(APIException):
@@ -148,6 +154,76 @@ def save_token_set(user, client_id, claims, token, scopes):
     connection.set_credentials(token)
     connection.save()
     return connection
+
+
+def revoke_connection(connection):
+    """Attempt provider revocation, then always remove the local credentials."""
+    confirmed = False
+    try:
+        credentials = connection.get_credentials()
+        refresh_token = credentials.get("refresh_token")
+        if refresh_token:
+            discovery_request = urllib.request.Request(
+                AUTH_BASE + "/.well-known/openid-configuration"
+            )
+            with urllib.request.urlopen(discovery_request, timeout=10) as response:
+                revocation_endpoint = json.loads(response.read(65536))[
+                    "revocation_endpoint"
+                ]
+            endpoint = urllib.parse.urlsplit(revocation_endpoint)
+            auth = urllib.parse.urlsplit(AUTH_BASE)
+            if (
+                endpoint.scheme != "https"
+                or endpoint.hostname != auth.hostname
+                or endpoint.username is not None
+                or endpoint.password is not None
+                or endpoint.port not in (None, auth.port or 443)
+            ):
+                raise ValueError("Untrusted revocation endpoint")
+            revoke_request = urllib.request.Request(
+                revocation_endpoint,
+                data=urllib.parse.urlencode(
+                    {
+                        "token": refresh_token,
+                        "token_type_hint": "refresh_token",
+                        "client_id": connection.client_id,
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            for attempt, delay in enumerate((0, 0.25, 0.75)):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    with urllib.request.build_opener(NoRedirectHandler()).open(
+                        revoke_request, timeout=15
+                    ) as response:
+                        confirmed = response.status == 200
+                    if confirmed:
+                        break
+                except urllib.error.HTTPError as exc:
+                    if not 500 <= exc.code < 600:
+                        break
+                except (urllib.error.URLError, TimeoutError, OSError):
+                    if attempt == 2:
+                        break
+    except Exception:
+        pass
+    connection.credentials_ciphertext = ""
+    connection.status = "revoked" if confirmed else "revocation_unconfirmed"
+    connection.save(update_fields=["credentials_ciphertext", "status", "updated_at"])
+    return confirmed
+
+
+def disconnect_user(user):
+    user_connections = ChatGPTConnection.objects.filter(user=user)
+    connections = user_connections.exclude(credentials_ciphertext="")
+    confirmed = True
+    for connection in connections:
+        confirmed = revoke_connection(connection) and confirmed
+    if user_connections.filter(status="revocation_unconfirmed").exists():
+        confirmed = False
+    return {"disconnected": True, "revocation_confirmed": confirmed}
 
 
 def validate_request(text, image_data=None):

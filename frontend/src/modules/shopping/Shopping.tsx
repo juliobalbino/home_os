@@ -10,7 +10,13 @@ import {
 } from "@mantine/core";
 import { IconPlus, IconReceipt, IconTrash } from "@tabler/icons-react";
 import { list, reason, request, send } from "../../lib/api";
-import { currencyToMinor, localDay, money, quantity } from "../../lib/format";
+import {
+  currencyToMinor,
+  DEFAULT_TIME_ZONE,
+  localDay,
+  money,
+  quantity,
+} from "../../lib/format";
 import { useToast } from "../../ui/Toaster";
 import { SectionNav } from "../../ui/SectionNav";
 import {
@@ -79,9 +85,11 @@ function receiptTotal(rows: ReceiptRow[]) {
 export default function Shopping({
   householdId,
   role,
+  timezone = DEFAULT_TIME_ZONE,
 }: {
   householdId: string;
   role: string;
+  timezone?: string;
 }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [lists, setLists] = useState<ShoppingList[]>([]);
@@ -175,7 +183,7 @@ export default function Shopping({
     let encoded: string;
     try {
       encoded = JSON.stringify({
-        purchased_at: localDay(),
+        purchased_at: localDay(new Date(), timezone),
         store_name: data.get("store_name"),
         items: rows.map((row, index) => ({
           product_id: Number(row.product_id),

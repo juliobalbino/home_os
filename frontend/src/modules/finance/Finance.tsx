@@ -14,6 +14,7 @@ import { IconCash, IconPlus } from "@tabler/icons-react";
 import { list, reason, request, send } from "../../lib/api";
 import type { Balance, Member, Summary } from "../../lib/api";
 import {
+  DEFAULT_TIME_ZONE,
   isoDay,
   localDay,
   localPeriod,
@@ -127,9 +128,11 @@ function PaymentForm({
 export default function Finance({
   householdId,
   role,
+  timezone = DEFAULT_TIME_ZONE,
 }: {
   householdId: string;
   role: string;
+  timezone?: string;
 }) {
   const canWrite = role === "owner" || role === "member";
   const [categories, setCategories] = useState<Category[]>([]);
@@ -144,7 +147,7 @@ export default function Finance({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [splitMethod, setSplitMethod] = useState("equal");
-  const [period] = useState(localPeriod);
+  const [period] = useState(() => localPeriod(new Date(), timezone));
   const toast = useToast();
 
   const refresh = useCallback(async () => {
@@ -453,7 +456,7 @@ export default function Finance({
                     name="incurred_on"
                     type="date"
                     required
-                    defaultValue={localDay()}
+                    defaultValue={localDay(new Date(), timezone)}
                   />
                 </div>
                 <NativeSelect

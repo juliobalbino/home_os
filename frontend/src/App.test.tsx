@@ -4,9 +4,13 @@ import App from "./App";
 import { renderWithProviders as render } from "./test/render";
 
 afterEach(() => {
-  cleanup();
-  vi.restoreAllMocks();
-  window.location.hash = "";
+  try {
+    cleanup();
+    vi.restoreAllMocks();
+    window.location.hash = "";
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 function signedIn(
@@ -32,6 +36,147 @@ function signedIn(
 }
 
 describe("authenticated account interface", () => {
+  it("uses the household timezone for the dashboard date, period, and chore time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T02:30:00.000Z"));
+    const fetchMock = signedIn(
+      [
+        {
+          id: "one",
+          name: "Casa Azul",
+          role: "member",
+          timezone: "Asia/Tokyo",
+        },
+      ],
+      (url) => {
+        if (url.endsWith("/me") || url.endsWith("/households"))
+          return undefined;
+        if (url.includes("financial-summary"))
+          return new Response(
+            JSON.stringify({ spent_total: 0, budget_total: 0 }),
+          );
+        if (url.endsWith("/settlements"))
+          return new Response(JSON.stringify([]));
+        if (url.endsWith("/shopping-lists"))
+          return new Response(JSON.stringify([]));
+        if (url.endsWith("/chore-occurrences"))
+          return new Response(
+            JSON.stringify([
+              {
+                id: 1,
+                title: "Preparar o café",
+                due_at: "2026-10-01T02:00:00Z",
+                status: "pending",
+              },
+            ]),
+          );
+        return undefined;
+      },
+    );
+    window.location.hash = "#/painel";
+    render(<App />);
+
+    expect(
+      await screen.findByText("quinta-feira, 1 de outubro"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(/11:00/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("financial-summary?period=2026-10"),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("uses the household timezone for the finance period and default expense date", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T02:30:00.000Z"));
+    const fetchMock = signedIn(
+      [
+        {
+          id: "one",
+          name: "Casa Azul",
+          role: "owner",
+          timezone: "Asia/Tokyo",
+        },
+      ],
+      (url) => {
+        if (url.endsWith("/me") || url.endsWith("/households"))
+          return undefined;
+        if (url.includes("financial-summary"))
+          return new Response(
+            JSON.stringify({ spent_total: 0, budget_total: 0 }),
+          );
+        if (url.endsWith("/auth/csrf"))
+          return new Response(JSON.stringify({ csrfToken: "csrf" }));
+        return new Response(JSON.stringify([]));
+      },
+    );
+    window.location.hash = "#/financas";
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Registrar despesa" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Data")).toHaveValue("2026-10-01");
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("financial-summary?period=2026-10"),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("uses the household timezone for a shopping receipt date", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T02:30:00.000Z"));
+    const fetchMock = signedIn(
+      [
+        {
+          id: "one",
+          name: "Casa Azul",
+          role: "owner",
+          timezone: "Asia/Tokyo",
+        },
+      ],
+      (url, init) => {
+        if (url.endsWith("/me") || url.endsWith("/households"))
+          return undefined;
+        if (url.endsWith("/auth/csrf"))
+          return new Response(JSON.stringify({ csrfToken: "csrf" }));
+        if (url.endsWith("/products"))
+          return new Response(
+            JSON.stringify([
+              { id: 1, name: "Arroz", unit: "kg", brand: "", category: "" },
+            ]),
+          );
+        if (url.endsWith("/purchases") && init?.method === "POST")
+          return new Response(JSON.stringify({ id: 1 }));
+        return new Response(JSON.stringify([]));
+      },
+    );
+    window.location.hash = "#/compras";
+    render(<App />);
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Produto" }), {
+      target: { value: "1" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("0,00"), {
+      target: { value: "5,00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Registrar compra" }));
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith("/purchases") && init?.method === "POST",
+      );
+      expect(request).toBeDefined();
+      expect(JSON.parse(String(request?.[1]?.body)).purchased_at).toBe(
+        "2026-10-01",
+      );
+    });
+  });
+
   it("shows sign-in and registration options when session is absent", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
