@@ -5,6 +5,7 @@ import {
   Button,
   FileInput,
   Group,
+  Modal,
   NativeSelect,
   Text,
   Textarea,
@@ -21,6 +22,11 @@ type Status = {
   connected: boolean;
   status?: string;
   configuration?: string;
+  can_disconnect?: boolean;
+};
+type DisconnectResponse = {
+  disconnected: boolean;
+  revocation_confirmed: boolean;
 };
 type Result = {
   text: string;
@@ -35,15 +41,15 @@ function statusText(status: Status | null) {
   if (status.connected) return "Conectado à sua conta ChatGPT";
   switch (status.configuration) {
     case "disabled":
-      return "Assistente desativado. Configure ASSISTANT_ENABLED=true e uma chave Fernet válida em ASSISTANT_ENCRYPTION_KEY.";
+      return "O Assistente está desativado no momento. Peça ajuda à pessoa administradora da casa para ativá-lo.";
     case "missing_or_invalid_encryption_key":
-      return "Assistente indisponível: ASSISTANT_ENCRYPTION_KEY precisa ser uma chave Fernet válida.";
+      return "O Assistente está indisponível no momento. Peça ajuda à pessoa administradora da casa.";
     case "credential_unavailable":
-      return "As credenciais não podem ser decifradas. Verifique se ASSISTANT_ENCRYPTION_KEY corresponde à chave usada na importação.";
+      return "O Assistente está indisponível no momento. Peça ajuda à pessoa administradora da casa.";
   }
   if (status.status === "consent_required")
-    return "O escopo de uso do plano não foi concedido. Refaça o OAuth e autorize o uso.";
-  return "Assistente não conectado. Um administrador pode concluir o OAuth local com assistant_oauth.";
+    return "A conexão do Assistente está indisponível até ser autorizada novamente. Peça à pessoa administradora da casa para reconectar.";
+  return "A conexão com o ChatGPT ainda não foi concluída. Peça ajuda à pessoa administradora da casa.";
 }
 
 function show(value: unknown) {
@@ -73,6 +79,10 @@ export default function Assistant({
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [disconnectBusy, setDisconnectBusy] = useState(false);
+  const [disconnectError, setDisconnectError] = useState("");
+  const [disconnectMessage, setDisconnectMessage] = useState("");
 
   useEffect(() => {
     request<Status>("/assistant/status")
@@ -114,6 +124,60 @@ export default function Assistant({
     }
   }
 
+  async function disconnect() {
+    setDisconnectBusy(true);
+    setDisconnectError("");
+    setDisconnectMessage("");
+    try {
+      const response = await send<DisconnectResponse>(
+        "/assistant/disconnect",
+        {},
+      );
+      if (response.disconnected) {
+        setStatus((current) =>
+          current
+            ? {
+                ...current,
+                connected: false,
+                can_disconnect: false,
+                status: response.revocation_confirmed
+                  ? "disconnected"
+                  : "revocation_unconfirmed",
+              }
+            : {
+                enabled: true,
+                connected: false,
+                can_disconnect: false,
+                status: response.revocation_confirmed
+                  ? "disconnected"
+                  : "revocation_unconfirmed",
+              },
+        );
+      }
+      setDisconnectMessage(
+        response.revocation_confirmed
+          ? "Acesso do Home OS desconectado com sucesso."
+          : "As credenciais locais do Home OS foram removidas, mas a revogação remota não foi confirmada.",
+      );
+      setDisconnectOpen(false);
+      try {
+        const refreshed = await request<Status>("/assistant/status");
+        setStatus(refreshed);
+      } catch {
+        // The successful disconnect response is authoritative; keep local state.
+      }
+    } catch (cause) {
+      setDisconnectError(
+        reason(
+          cause,
+          "Não foi possível desconectar o ChatGPT. Tente novamente.",
+        ),
+      );
+    } finally {
+      setDisconnectBusy(false);
+    }
+  }
+
   const connected = Boolean(status?.connected);
   return (
     <section aria-labelledby="assistant-title" className="tile assistant">
@@ -129,6 +193,56 @@ export default function Assistant({
       <Text size="sm" c="dimmed" className="assistant-status">
         {statusText(status)}
       </Text>
+      {status?.can_disconnect && (
+        <Button
+          variant="light"
+          color="red"
+          onClick={() => {
+            setDisconnectError("");
+            setDisconnectOpen(true);
+          }}
+        >
+          Desconectar ChatGPT
+        </Button>
+      )}
+      {disconnectMessage && (
+        <Text role="status" size="sm">
+          {disconnectMessage}
+        </Text>
+      )}
+      <Modal
+        opened={disconnectOpen}
+        onClose={() => {
+          if (!disconnectBusy) setDisconnectOpen(false);
+        }}
+        title="Desconectar ChatGPT"
+        closeOnClickOutside={!disconnectBusy}
+        closeOnEscape={!disconnectBusy}
+      >
+        <Text size="sm" mb="md">
+          Remover o acesso do Home OS? Isso remove o acesso do Home OS à sua
+          conta. Você continuará conectado às sessões do site do ChatGPT e em
+          outros dispositivos. Para conectar outra conta, será necessário seguir
+          o processo atual de conexão.
+        </Text>
+        {disconnectError && <ErrorNote>{disconnectError}</ErrorNote>}
+        <Group justify="flex-end" mt="lg">
+          <Button
+            variant="default"
+            disabled={disconnectBusy}
+            onClick={() => setDisconnectOpen(false)}
+          >
+            Cancelar
+          </Button>
+          <Button
+            color="red"
+            loading={disconnectBusy}
+            onClick={() => void disconnect()}
+          >
+            Confirmar desconexão
+          </Button>
+        </Group>
+      </Modal>
       {connected && (
         <Anchor
           href="https://chatgpt.com/settings/usage"

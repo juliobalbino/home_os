@@ -76,10 +76,11 @@ class AssistantCommandTests(TestCase):
             if os.name != "nt":
                 self.assertEqual(bundle_path.stat().st_mode & 0o777, 0o600)
 
-    @patch("apps.assistant.management.commands.assistant_oauth.urllib.request.urlopen")
-    @patch("apps.assistant.management.commands.assistant_oauth.time.sleep")
+    @patch("apps.assistant.services.urllib.request.build_opener")
+    @patch("apps.assistant.services.urllib.request.urlopen")
+    @patch("apps.assistant.services.time.sleep")
     def test_empty_http_200_revocation_succeeds_and_never_prints_refresh_token(
-        self, sleep, urlopen
+        self, sleep, urlopen, build_opener
     ):
         user = get_user_model().objects.create_user(
             email="revoke@example.test", name="Revoke", password="abcdef"
@@ -104,7 +105,8 @@ class AssistantCommandTests(TestCase):
         temporary = HTTPError(
             "https://auth.openai.com/revoke", 503, "busy", {}, BytesIO(b"")
         )
-        urlopen.side_effect = [metadata, temporary, revoked]
+        urlopen.return_value = metadata
+        build_opener.return_value.open.side_effect = [temporary, revoked]
         output = StringIO()
         call_command(
             "assistant_oauth",
@@ -118,6 +120,9 @@ class AssistantCommandTests(TestCase):
         self.assertEqual(connection.status, "revoked")
         self.assertEqual(connection.credentials_ciphertext, "")
         self.assertNotIn("private-refresh", output.getvalue())
-        self.assertIn(b"token_type_hint=refresh_token", urlopen.call_args.args[0].data)
-        self.assertEqual(urlopen.call_count, 3)
+        request = build_opener.return_value.open.call_args_list[0].args[0]
+        self.assertIn(b"token_type_hint=refresh_token", request.data)
+        self.assertNotIn("private-access", output.getvalue())
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(build_opener.return_value.open.call_count, 2)
         sleep.assert_called_once_with(0.25)

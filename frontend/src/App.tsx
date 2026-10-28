@@ -5,6 +5,7 @@ import { HouseholdPage } from "./household/HouseholdPage";
 import { Onboarding } from "./household/Onboarding";
 import { list, request, send } from "./lib/api";
 import type { Household, User } from "./lib/api";
+import { DEFAULT_TIME_ZONE } from "./lib/format";
 import { useRoute } from "./lib/route";
 import Assistant from "./modules/assistant/Assistant";
 import Chores from "./modules/chores/Chores";
@@ -66,6 +67,7 @@ export default function App() {
         onSignOut={() => void signOut()}
       />
     );
+  const timezone = house.timezone || DEFAULT_TIME_ZONE;
 
   return (
     <AppFrame route={route} household={house} user={user}>
@@ -82,21 +84,30 @@ export default function App() {
               householdId={house.id}
               householdName={house.name}
               role={house.role}
+              timezone={timezone}
             >
               <Assistant householdId={house.id} role={house.role} compact />
             </Dashboard>
           )}
           {route === "financas" && (
-            <Finance householdId={house.id} role={house.role} />
+            <Finance
+              householdId={house.id}
+              role={house.role}
+              timezone={timezone}
+            />
           )}
           {route === "compras" && (
-            <Shopping householdId={house.id} role={house.role} />
+            <Shopping
+              householdId={house.id}
+              role={house.role}
+              timezone={timezone}
+            />
           )}
           {route === "tarefas" && (
             <Chores
               householdId={house.id}
               role={house.role}
-              timezone={house.timezone}
+              timezone={timezone}
             />
           )}
           {route === "casa" && (
