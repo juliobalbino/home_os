@@ -57,6 +57,168 @@ describe("Assistant", () => {
     });
   });
 
+  it("starts an approved pairing with CSRF and shows one-time helper instructions", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/assistant/status"))
+          return new Response(
+            JSON.stringify({ enabled: true, connected: false }),
+            { status: 200 },
+          );
+        if (url.endsWith("/auth/csrf"))
+          return new Response(
+            JSON.stringify({ csrfToken: "fake-csrf-token" }),
+            { status: 200 },
+          );
+        if (url.endsWith("/assistant/connect/pairings") && method === "POST")
+          return new Response(
+            JSON.stringify({
+              pairing_id: "pairing-fake-001",
+              pairing_code: "FAKE-4821",
+            }),
+            { status: 201 },
+          );
+        if (url.endsWith("/assistant/connect/pairings/pairing-fake-001"))
+          return new Response(JSON.stringify({ status: "pending" }), {
+            status: 200,
+          });
+        throw new Error(`Unexpected fetch: ${method} ${url}`);
+      });
+    render(<Assistant householdId="h-1" role="member" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Conectar ChatGPT" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("FAKE-4821");
+    expect(dialog).toHaveTextContent(/windows/i);
+    expect(dialog).toHaveTextContent(/auxiliar|assistente/i);
+    expect(
+      screen.getByRole("link", { name: /baixar|download/i }),
+    ).toHaveAttribute("href", "/api/v1/assistant/connect/helper");
+
+    const pairingPost = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/assistant/connect/pairings") &&
+        init?.method === "POST",
+    );
+    expect(pairingPost).toBeDefined();
+    expect(pairingPost?.[1]?.headers).toMatchObject({
+      "X-CSRFToken": "fake-csrf-token",
+    });
+    const body = JSON.parse(String(pairingPost?.[1]?.body));
+    expect(JSON.stringify(body)).not.toMatch(
+      /credential|password|access.?token|refresh.?token/i,
+    );
+    expect(JSON.stringify(body)).not.toContain("FAKE-4821");
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toMatch(
+      /oauth|client_secret/i,
+    );
+  });
+
+  it("allows a viewer to initiate their own pairing without showing Analisar", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/assistant/status"))
+        return new Response(
+          JSON.stringify({ enabled: true, connected: false }),
+          { status: 200 },
+        );
+      if (url.endsWith("/auth/csrf"))
+        return new Response(JSON.stringify({ csrfToken: "fake-csrf-token" }), {
+          status: 200,
+        });
+      if (url.endsWith("/assistant/connect/pairings") && method === "POST")
+        return new Response(
+          JSON.stringify({
+            pairing_id: "pairing-viewer-fake",
+            pairing_code: "VIEW-1937",
+          }),
+          { status: 201 },
+        );
+      if (url.endsWith("/assistant/connect/pairings/pairing-viewer-fake"))
+        return new Response(JSON.stringify({ status: "pending" }), {
+          status: 200,
+        });
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+    render(<Assistant householdId="h-1" role="viewer" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Conectar ChatGPT" }),
+    );
+    expect(await screen.findByRole("dialog")).toHaveTextContent("VIEW-1937");
+    expect(
+      screen.queryByRole("button", { name: /analisar/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("refreshes status and closes pairing modal when polling reports completion", async () => {
+    let statusRequests = 0;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/assistant/status")) {
+          statusRequests += 1;
+          return new Response(
+            JSON.stringify(
+              statusRequests === 1
+                ? { enabled: true, connected: false }
+                : { enabled: true, connected: true, status: "connected" },
+            ),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/auth/csrf"))
+          return new Response(
+            JSON.stringify({ csrfToken: "fake-csrf-token" }),
+            { status: 200 },
+          );
+        if (url.endsWith("/assistant/connect/pairings") && method === "POST")
+          return new Response(
+            JSON.stringify({
+              pairing_id: "pairing-complete-fake",
+              pairing_code: "DONE-7350",
+            }),
+            { status: 201 },
+          );
+        if (url.endsWith("/assistant/connect/pairings/pairing-complete-fake"))
+          return new Response(JSON.stringify({ status: "completed" }), {
+            status: 200,
+          });
+        throw new Error(`Unexpected fetch: ${method} ${url}`);
+      });
+    render(<Assistant householdId="h-1" role="member" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Conectar ChatGPT" }),
+    );
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(
+          screen.getByText(/conectado à sua conta chatgpt/i),
+        ).toBeInTheDocument();
+      },
+      { timeout: 4000 },
+    );
+    expect(statusRequests).toBeGreaterThan(1);
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("oauth")),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/assistant/connect/helper"),
+      ),
+    ).toBe(false);
+  });
+
   it("lets a viewer cancel the disconnect confirmation without disconnecting", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -159,9 +321,7 @@ describe("Assistant", () => {
     expect(
       await screen.findByText(/desconectado com sucesso/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/conexão com o chatgpt ainda não foi concluída/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/conecte sua conta chatgpt/i)).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(
         ([input, init]) =>
@@ -275,9 +435,7 @@ describe("Assistant", () => {
         /credenciais.*home os.*removidas.*revogação remota.*não.*confirmada/i,
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/conexão com o chatgpt ainda não foi concluída/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/conecte sua conta chatgpt/i)).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(
         ([input, init]) =>
@@ -322,12 +480,16 @@ describe("Assistant", () => {
       render(<Assistant householdId="h-1" role="member" />);
 
       const guidance = await screen.findByText(
-        /por enquanto|no momento|ainda não|indisponível/i,
+        /por enquanto|no momento|ainda não|indisponível|conecte/i,
         { selector: "p" },
       );
       const copy = guidance.textContent ?? "";
-      expect(copy).toMatch(/por enquanto|no momento|ainda não|indisponível/i);
-      expect(copy).toMatch(/administrador|equipe|ajuda|tente novamente/i);
+      expect(copy).toMatch(
+        /por enquanto|no momento|ainda não|indisponível|conecte/i,
+      );
+      expect(copy).toMatch(
+        /conecte|administrador|equipe|ajuda|tente novamente/i,
+      );
       expect(copy).not.toMatch(
         /ASSISTANT_ENABLED|ASSISTANT_ENCRYPTION_KEY|Fernet|assistant_oauth|OAuth local|configure.*chave|refaça.*oauth/i,
       );

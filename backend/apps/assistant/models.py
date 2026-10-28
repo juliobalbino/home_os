@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from cryptography.fernet import Fernet
 from django.conf import settings
@@ -54,3 +55,39 @@ class AssistantUsage(models.Model):
     user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
     household_id = models.UUIDField()
     created_at = models.DateTimeField(default=timezone.now)
+
+
+class AssistantPairing(models.Model):
+    pairing_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        get_user_model(), on_delete=models.CASCADE, related_name="assistant_pairings"
+    )
+    pairing_code_hash = models.CharField(max_length=64, unique=True)
+    host_id = models.CharField(max_length=300)
+    status = models.CharField(max_length=24, default="pending")
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(default=timezone.now)
+    pending_ciphertext = models.TextField(blank=True)
+    helper_token_hash = models.CharField(max_length=64, blank=True)
+
+    def set_pending(self, pending):
+        self.pending_ciphertext = (
+            credential_cipher().encrypt(json.dumps(pending).encode()).decode()
+        )
+
+    def get_pending(self):
+        if not self.pending_ciphertext:
+            return {}
+        return json.loads(credential_cipher().decrypt(self.pending_ciphertext.encode()))
+
+
+class AssistantHostIdentity(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    host_id = models.CharField(max_length=300)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(id=1), name="assistant_host_identity_singleton"
+            )
+        ]

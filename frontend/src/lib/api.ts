@@ -1,5 +1,17 @@
 const API = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
+export function apiOriginFromBase(apiBase: string, pageOrigin: string): string {
+  return new URL(apiBase, pageOrigin).origin;
+}
+
+export function apiOrigin(): string {
+  return apiOriginFromBase(API, window.location.origin);
+}
+
+export function apiUrl(path: string): string {
+  return `${API.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
+}
+
 export type User = { id: number; email: string; name: string };
 export type Role = "owner" | "member" | "viewer" | string;
 export type Household = {
@@ -37,7 +49,7 @@ export async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
+  const response = await fetch(apiUrl(path), {
     credentials: "include",
     ...options,
     headers: { "Content-Type": "application/json", ...options.headers },
