@@ -13,7 +13,7 @@ import {
 } from "@mantine/core";
 import { IconExternalLink, IconPhoto, IconSparkles } from "@tabler/icons-react";
 import { AnimatePresence, motion } from "motion/react";
-import { reason, request, send } from "../../lib/api";
+import { apiOrigin, apiUrl, reason, request, send } from "../../lib/api";
 import { TileMark } from "../../ui/Tile";
 import { ErrorNote } from "../../ui/parts";
 
@@ -33,12 +33,28 @@ type Result = {
   candidates: Record<string, unknown> | null;
   requires_confirmation: boolean;
 };
+type Pairing = { pairing_id: string; pairing_code: string; expires_at: string };
+type PairingStatus = {
+  status:
+    | "pending"
+    | "claimed"
+    | "completing"
+    | "completed"
+    | "expired"
+    | "cancelled"
+    | "failed";
+  expires_at: string;
+};
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 function statusText(status: Status | null) {
   if (!status) return "Verificando o assistente…";
   if (status.connected) return "Conectado à sua conta ChatGPT";
+  if (status.status === "consent_required")
+    return "O consentimento ainda está pendente. Conecte novamente e aprove o acesso no navegador.";
+  if (status.status === "pending_configuration")
+    return "Conexão concluída; a configuração do Assistente ainda está pendente.";
   switch (status.configuration) {
     case "disabled":
       return "O Assistente está desativado no momento. Peça ajuda à pessoa administradora da casa para ativá-lo.";
@@ -47,9 +63,9 @@ function statusText(status: Status | null) {
     case "credential_unavailable":
       return "O Assistente está indisponível no momento. Peça ajuda à pessoa administradora da casa.";
   }
-  if (status.status === "consent_required")
-    return "A conexão do Assistente está indisponível até ser autorizada novamente. Peça à pessoa administradora da casa para reconectar.";
-  return "A conexão com o ChatGPT ainda não foi concluída. Peça ajuda à pessoa administradora da casa.";
+  return status.enabled
+    ? "Conecte sua conta ChatGPT usando o botão Conectar ChatGPT."
+    : "A conexão com o ChatGPT ainda não foi concluída. Peça ajuda à pessoa administradora da casa.";
 }
 
 function show(value: unknown) {
@@ -83,12 +99,100 @@ export default function Assistant({
   const [disconnectBusy, setDisconnectBusy] = useState(false);
   const [disconnectError, setDisconnectError] = useState("");
   const [disconnectMessage, setDisconnectMessage] = useState("");
+  const [pairing, setPairing] = useState<Pairing | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [pairingState, setPairingState] = useState("");
+  const [pairingError, setPairingError] = useState("");
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState("");
 
   useEffect(() => {
     request<Status>("/assistant/status")
       .then(setStatus)
       .catch(() => setStatus({ enabled: false, connected: false }));
   }, []);
+
+  useEffect(() => {
+    if (!pairing) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const current = await request<PairingStatus>(
+          `/assistant/connect/pairings/${encodeURIComponent(pairing.pairing_id)}`,
+        );
+        if (!active) return;
+        setPairingState(current.status);
+        if (current.status === "completed") {
+          const refreshed = await request<Status>("/assistant/status");
+          if (!active) return;
+          setStatus({
+            ...refreshed,
+          });
+          setPairing(null);
+          setConnectOpen(false);
+          setPairingState(
+            refreshed.status === "consent_required"
+              ? "consent_required"
+              : refreshed.status === "pending_configuration"
+                ? "pending_configuration"
+                : refreshed.connected
+                  ? "connected"
+                  : "",
+          );
+          return;
+        }
+        if (["expired", "cancelled", "failed"].includes(current.status)) {
+          setPairingError(
+            current.status === "expired"
+              ? "O código expirou."
+              : current.status === "cancelled"
+                ? "A conexão foi cancelada."
+                : "Não foi possível concluir a conexão.",
+          );
+          return;
+        }
+        timer = setTimeout(poll, 1000);
+      } catch {
+        if (active) {
+          setPairingError(
+            "Não foi possível verificar a conexão. Tente novamente.",
+          );
+        }
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [pairing]);
+
+  async function startPairing(forceRetry = false) {
+    setConnectOpen(true);
+    if (pairing && !forceRetry) return;
+    if (forceRetry) setPairing(null);
+    setPairingBusy(true);
+    setPairingError("");
+    setPairingState("");
+    try {
+      const created = await send<Pairing>("/assistant/connect/pairings", {});
+      setPairing(created);
+    } catch (cause) {
+      setPairingError(reason(cause, "Não foi possível iniciar a conexão."));
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
+  async function copy(value: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyFeedback(`${label} copiado.`);
+    } catch {
+      setCopyFeedback(`Não foi possível copiar ${label.toLowerCase()}.`);
+    }
+  }
 
   function pick(file: File | null) {
     setError("");
@@ -193,6 +297,115 @@ export default function Assistant({
       <Text size="sm" c="dimmed" className="assistant-status">
         {statusText(status)}
       </Text>
+      {status?.enabled && !connected && (
+        <Button
+          onClick={() => {
+            setPairingError("");
+            setPairingState("");
+            void startPairing();
+          }}
+          loading={pairingBusy}
+        >
+          Conectar ChatGPT
+        </Button>
+      )}
+      <Modal
+        opened={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        title="Conectar ChatGPT"
+        size="lg"
+      >
+        {pairingBusy && (
+          <Text role="status" size="sm" mb="sm">
+            Iniciando conexão…
+          </Text>
+        )}
+        {pairing && (
+          <>
+            <Text size="sm" mb="sm">
+              Siga estas etapas para conectar sua conta:
+            </Text>
+            <ol>
+              <li>Copie a origem da API do Home OS.</li>
+              <li>Baixe o auxiliar do Windows.</li>
+              <li>
+                Execute <code>python homeos_chatgpt_connect.py</code>.
+              </li>
+              <li>Digite o código de pareamento no auxiliar.</li>
+              <li>
+                No navegador, selecione a conta ChatGPT que deseja conectar; se
+                necessário, use a opção do provedor para entrar com outra conta.
+                Conclua o login e dê consentimento.
+              </li>
+            </ol>
+            <Text size="sm" mb="sm">
+              O código de uso único expira em 5 minutos. Isso não desconecta
+              suas sessões do site do ChatGPT.
+            </Text>
+            <Group mb="sm">
+              <Button onClick={() => void copy(apiOrigin(), "Origem da API")}>
+                Copiar origem da API
+              </Button>
+              <Text size="sm" c="dimmed">
+                {apiOrigin()}
+              </Text>
+              <Button
+                component="a"
+                href={apiUrl("/assistant/connect/helper")}
+                download
+              >
+                Baixar auxiliar do Windows
+              </Button>
+            </Group>
+            <Group>
+              <Text fw={700} aria-label="Código de pareamento">
+                {pairing.pairing_code}
+              </Text>
+              <Button
+                variant="light"
+                onClick={() => void copy(pairing.pairing_code, "Código")}
+              >
+                Copiar código
+              </Button>
+            </Group>
+            <Text role="status" aria-live="polite" size="sm" mt="sm">
+              {copyFeedback ||
+                (pairingState === "claimed"
+                  ? "Auxiliar conectado; aguardando conclusão…"
+                  : pairingState === "completing"
+                    ? "Finalizando a conexão…"
+                    : "Aguardando o auxiliar…")}
+            </Text>
+          </>
+        )}
+        {pairingError && <ErrorNote>{pairingError}</ErrorNote>}
+        {pairingState === "consent_required" && (
+          <Text role="status">
+            Conexão concluída, mas é necessário conceder consentimento
+            novamente.
+          </Text>
+        )}
+        {pairingState === "pending_configuration" && (
+          <Text role="status">
+            Conexão concluída; a configuração ainda está pendente.
+          </Text>
+        )}
+        {pairingState === "connected" && (
+          <Text role="status">ChatGPT conectado com sucesso.</Text>
+        )}
+        {pairingError && (
+          <Button
+            mt="md"
+            onClick={() => {
+              setPairingError("");
+              setPairingState("");
+              void startPairing(true);
+            }}
+          >
+            Tentar novamente
+          </Button>
+        )}
+      </Modal>
       {status?.can_disconnect && (
         <Button
           variant="light"
@@ -220,10 +433,11 @@ export default function Assistant({
         closeOnEscape={!disconnectBusy}
       >
         <Text size="sm" mb="md">
-          Remover o acesso do Home OS? Isso remove o acesso do Home OS à sua
-          conta. Você continuará conectado às sessões do site do ChatGPT e em
-          outros dispositivos. Para conectar outra conta, será necessário seguir
-          o processo atual de conexão.
+          Remover o acesso do Home OS? Isso sempre remove as credenciais locais
+          do Home OS. A revogação no provedor pode não estar disponível ou
+          confirmada para credenciais transferidas à VM. Você continuará
+          conectado às sessões do site do ChatGPT e em outros dispositivos. Para
+          conectar novamente, use Conectar ChatGPT e siga as etapas mostradas.
         </Text>
         {disconnectError && <ErrorNote>{disconnectError}</ErrorNote>}
         <Group justify="flex-end" mt="lg">

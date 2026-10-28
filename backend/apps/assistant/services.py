@@ -59,10 +59,20 @@ def new_authorization(
         or parsed.path != "/auth/callback"
         or parsed.query
         or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+        or "?" in redirect_uri
+        or "#" in redirect_uri
     ):
         raise ValidationError(
             "Redirect precisa ser o callback HTTP loopback exato em 127.0.0.1."
         )
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValidationError("Porta de callback inválida.") from exc
+    if port is None or not 1 <= port <= 65535:
+        raise ValidationError("Porta de callback inválida.")
     if not (
         host_id.startswith("urn:uuid:")
         or host_id.startswith("urn:ietf:params:oauth:jwk-thumbprint:")
