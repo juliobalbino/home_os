@@ -31,11 +31,17 @@ export function HouseholdPage({
   user: User;
   onSignOut: () => void;
 }) {
-  const owner = household.role === "owner";
+  const owner = !household.isArchived && household.role === "owner";
   const [members, setMembers] = useState<Member[] | null>(null);
   const [membersError, setMembersError] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [token, setToken] = useState("");
+  const [proposal, setProposal] = useState<{
+    proposal_id: string;
+    title: string;
+    summary: string;
+    details: { role: string; expires_in_days: number };
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { colorScheme, setColorScheme } = useMantineColorScheme();
@@ -60,15 +66,37 @@ export function HouseholdPage({
     setBusy(true);
     setError("");
     try {
-      const result = await send<{ token: string }>(
-        `/households/${household.id}/invitations`,
-        {
-          role: inviteRole,
-        },
-      );
-      setToken(result.token);
+      const result = await send<{
+        proposal_id: string;
+        title: string;
+        summary: string;
+        details: { role: string; expires_in_days: number };
+      }>(`/households/${household.id}/invitations`, {
+        role: inviteRole,
+      });
+      setToken("");
+      setProposal(result);
     } catch (cause) {
       setError(reason(cause, "Falha ao criar convite."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function decideInvitation(confirm: boolean) {
+    if (!proposal) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await send<{ token?: string }>(
+        `/households/${household.id}/assistant/actions/${proposal.proposal_id}`,
+        { confirm },
+      );
+      setProposal(null);
+      setToken(confirm ? (result.token ?? "") : "");
+      if (!confirm) setError("Convite cancelado.");
+    } catch (cause) {
+      setError(reason(cause, "Não foi possível concluir o convite."));
     } finally {
       setBusy(false);
     }
@@ -77,7 +105,9 @@ export function HouseholdPage({
   return (
     <div className="page">
       <PageHeader motif="estrela" title={household.name}>
-        Seu papel: {roleLabel(household.role).toLowerCase()}
+        {household.isArchived
+          ? "Residência arquivada"
+          : `Seu papel: ${roleLabel(household.role).toLowerCase()}`}
       </PageHeader>
       <div className="tile-wall casa-wall">
         <TileSection title="Quem mora aqui" id="moradores">
@@ -107,70 +137,112 @@ export function HouseholdPage({
           )}
         </TileSection>
 
-        <TileSection title="Convidar alguém" id="convite">
-          {owner ? (
-            <div className="stack">
-              <Text size="sm" c="dimmed">
-                Gere um código de convite e envie para a pessoa. Ele vale por 7
-                dias e pode ser usado uma única vez.
-              </Text>
-              <SegmentedControl
-                value={inviteRole}
-                onChange={setInviteRole}
-                aria-label="Papel da pessoa convidada"
-                data={[
-                  { value: "member", label: "Membro" },
-                  { value: "viewer", label: "Só visualiza" },
-                ]}
-              />
-              <Group>
-                <Button onClick={() => void invite()} loading={busy}>
-                  Criar convite
-                </Button>
-              </Group>
-              {error && <ErrorNote>{error}</ErrorNote>}
-              {token && (
-                <div className="token" role="status">
-                  <Text size="sm" fw={600}>
-                    Convite criado. Compartilhe este código; ele pode ser usado
-                    uma única vez.
-                  </Text>
-                  <Group gap="xs" wrap="nowrap" align="flex-end">
-                    <TextInput
-                      id="issued-invite-token"
-                      label="Código do convite (expira em 7 dias)"
-                      readOnly
-                      value={token}
-                      onFocus={(event) => event.currentTarget.select()}
-                      className="token-input"
-                    />
-                    <CopyButton value={token}>
-                      {({ copied, copy }) => (
-                        <Button
-                          variant={copied ? "filled" : "light"}
-                          onClick={copy}
-                          leftSection={
-                            copied ? (
-                              <IconCheck size={16} />
-                            ) : (
-                              <IconCopy size={16} />
-                            )
-                          }
-                        >
-                          {copied ? "Copiado" : "Copiar código"}
-                        </Button>
-                      )}
-                    </CopyButton>
-                  </Group>
-                </div>
-              )}
-            </div>
-          ) : (
-            <Text size="sm" c="dimmed">
-              Somente a pessoa responsável pela casa pode criar convites.
+        {household.isArchived ? (
+          <TileSection title="Residência arquivada" id="convite">
+            <Text size="sm" c="dimmed" role="status">
+              Esta residência está arquivada e disponível somente para leitura.
+              Convites e alterações estão desativados.
             </Text>
-          )}
-        </TileSection>
+          </TileSection>
+        ) : (
+          <TileSection title="Convidar alguém" id="convite">
+            {owner ? (
+              <div className="stack">
+                <Text size="sm" c="dimmed">
+                  Gere um código de convite e envie para a pessoa. Ele vale por
+                  7 dias e pode ser usado uma única vez.
+                </Text>
+                <SegmentedControl
+                  value={inviteRole}
+                  onChange={setInviteRole}
+                  aria-label="Papel da pessoa convidada"
+                  data={[
+                    { value: "member", label: "Membro" },
+                    { value: "viewer", label: "Só visualiza" },
+                  ]}
+                />
+                <Group>
+                  <Button onClick={() => void invite()} loading={busy}>
+                    Criar convite
+                  </Button>
+                </Group>
+                {error && <ErrorNote>{error}</ErrorNote>}
+                {proposal && (
+                  <div
+                    role="group"
+                    aria-label="Prévia do convite"
+                    className="stack"
+                  >
+                    <div role="status" aria-live="polite">
+                      <Text fw={600}>{proposal.summary}</Text>
+                      <Text size="sm">
+                        Papel: {roleLabel(proposal.details.role)}
+                      </Text>
+                      <Text size="sm">
+                        Expira em {proposal.details.expires_in_days} dias.
+                      </Text>
+                    </div>
+                    <Group>
+                      <Button
+                        disabled={busy}
+                        loading={busy}
+                        onClick={() => void decideInvitation(true)}
+                      >
+                        Confirmar convite
+                      </Button>
+                      <Button
+                        variant="default"
+                        disabled={busy}
+                        onClick={() => void decideInvitation(false)}
+                      >
+                        Cancelar convite
+                      </Button>
+                    </Group>
+                  </div>
+                )}
+                {token && (
+                  <div className="token" role="status">
+                    <Text size="sm" fw={600}>
+                      Convite criado. Compartilhe este código; ele pode ser
+                      usado uma única vez.
+                    </Text>
+                    <Group gap="xs" wrap="nowrap" align="flex-end">
+                      <TextInput
+                        id="issued-invite-token"
+                        label="Código do convite (expira em 7 dias)"
+                        readOnly
+                        value={token}
+                        onFocus={(event) => event.currentTarget.select()}
+                        className="token-input"
+                      />
+                      <CopyButton value={token}>
+                        {({ copied, copy }) => (
+                          <Button
+                            variant={copied ? "filled" : "light"}
+                            onClick={copy}
+                            leftSection={
+                              copied ? (
+                                <IconCheck size={16} />
+                              ) : (
+                                <IconCopy size={16} />
+                              )
+                            }
+                          >
+                            {copied ? "Copiado" : "Copiar código"}
+                          </Button>
+                        )}
+                      </CopyButton>
+                    </Group>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Text size="sm" c="dimmed">
+                Somente a pessoa responsável pela casa pode criar convites.
+              </Text>
+            )}
+          </TileSection>
+        )}
 
         <TileSection title="Sua conta" id="conta">
           <div className="stack">

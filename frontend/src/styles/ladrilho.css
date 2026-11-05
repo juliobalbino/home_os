@@ -233,7 +233,29 @@ textarea {
 }
 
 .frame-house {
-  max-width: 50%;
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.frame-household-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(52vw, 360px);
+}
+.frame-house select {
+  width: 100%;
+  min-width: 0;
+}
+.frame-house select:focus-visible {
+  outline: 3px solid var(--hos-focus);
+  outline-offset: 2px;
+}
+.readonly-state {
+  white-space: nowrap;
+  font-weight: 700;
 }
 
 .frame-nav {
@@ -1126,6 +1148,9 @@ textarea {
 }
 
 @media (min-width: 64em) {
+  .frame-household-control {
+    max-width: 100%;
+  }
   .section-nav {
     display: none;
   }
@@ -1145,9 +1170,6 @@ textarea {
     backdrop-filter: none;
     color: #fff;
     --m-base: var(--hos-surface);
-  }
-  .frame-house {
-    display: none;
   }
   .frame-nav {
     position: sticky;

@@ -2,6 +2,7 @@ from django.urls import path
 
 from apps.assistant.views import (
     AssistantDisconnectView,
+    AssistantActionProposalView,
     AssistantHelperDownloadView,
     AssistantPairingCollectionView,
     AssistantPairingDetailView,
@@ -47,5 +48,10 @@ urlpatterns = [
         "households/<uuid:household_id>/assistant",
         AssistantRequestView.as_view(),
         name="household-assistant",
+    ),
+    path(
+        "households/<uuid:household_id>/assistant/actions/<uuid:proposal_id>",
+        AssistantActionProposalView.as_view(),
+        name="assistant-action-proposal",
     ),
 ]

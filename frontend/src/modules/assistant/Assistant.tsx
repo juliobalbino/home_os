@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   Anchor,
   Badge,
+  Card,
   Button,
   FileInput,
   Group,
@@ -32,6 +33,32 @@ type Result = {
   text: string;
   candidates: Record<string, unknown> | null;
   requires_confirmation: boolean;
+  actions?: ActionProposal[];
+};
+type ActionProposal = {
+  proposal_id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  details: {
+    list?: { name?: string; status?: string };
+    items?: Array<{
+      product_name?: string | null;
+      free_text_name?: string | null;
+      quantity?: string | number;
+      unit?: string;
+      status?: string;
+    }>;
+  };
+  expires_at: string;
+  localStatus?:
+    | "pending"
+    | "completed"
+    | "cancelled"
+    | "stale"
+    | "expired"
+    | "error";
+  feedback?: string;
 };
 type Pairing = { pairing_id: string; pairing_code: string; expires_at: string };
 type PairingStatus = {
@@ -76,6 +103,98 @@ function show(value: unknown) {
     : JSON.stringify(value);
 }
 
+const localizedStatus: Record<string, string> = {
+  active: "Ativa",
+  pending: "Pendente",
+  checked: "Separado",
+  completed: "Concluído",
+};
+
+function AssistantActionProposal({
+  proposal,
+  onAction,
+  busy,
+}: {
+  proposal: ActionProposal;
+  onAction: (confirm: boolean) => void;
+  busy: boolean;
+}) {
+  const isDelete = proposal.kind === "delete_shopping_list";
+  const terminal = proposal.localStatus && proposal.localStatus !== "pending";
+  return (
+    <Card
+      withBorder
+      role="group"
+      aria-label={proposal.title}
+      mt="md"
+      padding="md"
+    >
+      <Title order={4}>{proposal.title}</Title>
+      <Text>{proposal.summary}</Text>
+      {isDelete && (
+        <>
+          <Text fw={700} mt="sm">
+            Prévia da lista:
+          </Text>
+          <Text fw={700}>
+            {proposal.details.list?.name ?? "Lista sem nome"}
+          </Text>
+          {proposal.details.list?.status && (
+            <Text size="sm">
+              Status da lista:{" "}
+              {localizedStatus[proposal.details.list.status] ?? "Outro"}
+            </Text>
+          )}
+          <ul aria-label="Itens da lista">
+            {(proposal.details.items ?? []).map((item, index) => (
+              <li key={index}>
+                <Text component="span">
+                  {item.product_name || item.free_text_name || "Item sem nome"}
+                </Text>
+                {" — "}
+                <Text component="span">
+                  {item.quantity ?? "—"} {item.unit ?? ""}
+                </Text>
+                {" — "}
+                <Text component="span">
+                  {localizedStatus[item.status ?? ""] ?? "Outro"} (
+                  {item.status ?? "desconhecido"})
+                </Text>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <Text role="status" aria-live="polite" mt="sm">
+        {proposal.feedback ??
+          (terminal
+            ? ""
+            : "Aguardando sua confirmação para aplicar esta ação.")}
+      </Text>
+      {!terminal && (
+        <Group mt="sm">
+          <Button
+            color="red"
+            onClick={() => onAction(true)}
+            loading={busy}
+            disabled={busy}
+          >
+            Confirmar exclusão
+          </Button>
+          <Button
+            variant="default"
+            onClick={() => onAction(false)}
+            loading={busy}
+            disabled={busy}
+          >
+            Cancelar proposta
+          </Button>
+        </Group>
+      )}
+    </Card>
+  );
+}
+
 export default function Assistant({
   householdId,
   role,
@@ -89,7 +208,7 @@ export default function Assistant({
   const [open, setOpen] = useState(!compact);
   const [status, setStatus] = useState<Status | null>(null);
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<"text" | "label">("label");
+  const [mode, setMode] = useState<"text" | "label" | "operator">("label");
   const [image, setImage] = useState<File | null>(null);
   const [imageData, setImageData] = useState("");
   const [result, setResult] = useState<Result | null>(null);
@@ -105,12 +224,21 @@ export default function Assistant({
   const [pairingError, setPairingError] = useState("");
   const [pairingBusy, setPairingBusy] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState("");
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
 
   useEffect(() => {
     request<Status>("/assistant/status")
       .then(setStatus)
       .catch(() => setStatus({ enabled: false, connected: false }));
   }, []);
+
+  useEffect(() => {
+    setResult(null);
+    setError("");
+    setText("");
+    setImage(null);
+    setImageData("");
+  }, [householdId]);
 
   useEffect(() => {
     if (!pairing) return;
@@ -218,6 +346,7 @@ export default function Assistant({
         await send<Result>(`/households/${householdId}/assistant`, {
           text,
           mode,
+          ...(mode === "operator" ? { request_id: crypto.randomUUID() } : {}),
           ...(imageData ? { image_data: imageData } : {}),
         }),
       );
@@ -225,6 +354,58 @@ export default function Assistant({
       setError(reason(cause, "Não foi possível concluir a análise."));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function respondToProposal(proposal: ActionProposal, confirm: boolean) {
+    setActionBusy(proposal.proposal_id);
+    try {
+      await send(
+        `/households/${householdId}/assistant/actions/${encodeURIComponent(proposal.proposal_id)}`,
+        { confirm },
+      );
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              actions: current.actions?.map((item) =>
+                item.proposal_id === proposal.proposal_id
+                  ? {
+                      ...item,
+                      localStatus: confirm ? "completed" : "cancelled",
+                      feedback: confirm
+                        ? "Exclusão concluída com sucesso."
+                        : "Proposta cancelada.",
+                    }
+                  : item,
+              ),
+            }
+          : current,
+      );
+    } catch (cause) {
+      const code = (cause as Error & { status?: number }).status;
+      const localStatus =
+        code === 409 ? "stale" : code === 410 ? "expired" : "error";
+      const feedback =
+        code === 409
+          ? "A proposta está desatualizada e não foi aplicada. Solicite uma nova análise."
+          : code === 410
+            ? "A proposta expirou e não foi aplicada. Solicite uma nova análise."
+            : "Não foi possível concluir a ação. Nenhuma exclusão foi confirmada.";
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              actions: current.actions?.map((item) =>
+                item.proposal_id === proposal.proposal_id
+                  ? { ...item, localStatus, feedback }
+                  : item,
+              ),
+            }
+          : current,
+      );
+    } finally {
+      setActionBusy(null);
     }
   }
 
@@ -499,9 +680,12 @@ export default function Assistant({
               label="Tipo de resposta"
               value={mode}
               onChange={(event) =>
-                setMode(event.currentTarget.value as "text" | "label")
+                setMode(
+                  event.currentTarget.value as "text" | "label" | "operator",
+                )
               }
               data={[
+                { value: "operator", label: "Operador da casa" },
                 { value: "label", label: "Candidatos de etiqueta" },
                 { value: "text", label: "Resposta em texto" },
               ]}
@@ -552,13 +736,25 @@ export default function Assistant({
             )}
             {result.requires_confirmation ? (
               <Text fw={700} size="sm" className="assistant-confirm">
-                Confirme antes de salvar. Nenhuma alteração foi feita.
+                {result.actions?.length
+                  ? "Confirmação pendente para as ações abaixo."
+                  : "Confirme antes de salvar. Nenhuma alteração foi feita."}
               </Text>
             ) : (
               <Text size="sm" c="dimmed">
                 Nenhuma alteração foi feita.
               </Text>
             )}
+            {result.actions?.map((proposal) => (
+              <AssistantActionProposal
+                key={proposal.proposal_id}
+                proposal={proposal}
+                busy={actionBusy === proposal.proposal_id}
+                onAction={(confirm) =>
+                  void respondToProposal(proposal, confirm)
+                }
+              />
+            ))}
           </motion.div>
         )}
       </AnimatePresence>

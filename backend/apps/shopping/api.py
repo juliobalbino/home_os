@@ -1,26 +1,15 @@
-import hashlib
 import json
-from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
-from django.db import IntegrityError, transaction
-from django.db.models import F
+from decimal import Decimal, InvalidOperation
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.finance.models import Expense, ExpenseCategory, ExpenseSplit, Payment
-from apps.households.models import Membership
 from apps.households.permissions import require_membership
 from apps.inventory.models import InventoryEvent, InventoryItem
-from apps.audit.models import AuditEvent
 from apps.shopping.models import (
     PriceObservation,
     Product,
-    ProductAlias,
-    Purchase,
-    PurchaseItem,
     ShoppingList,
     ShoppingListItem,
 )
@@ -89,25 +78,16 @@ def products(request, household_id):
                 )
             ]
         )
-    try:
-        name = _text(request.data.get("name", ""), 120).strip()
-        unit = _text(request.data.get("unit", ""), 24).strip()
-        brand = _text(request.data.get("brand", ""), 120)
-        category = _text(request.data.get("category", ""), 80)
-    except ValueError:
-        raise ValidationError({"detail": "Campo inválido ou acima do tamanho máximo."})
-    if not name or not unit:
-        raise ValidationError({"detail": "Nome e unidade são obrigatórios."})
-    try:
-        product = Product.objects.create(
-            household=member.household,
-            name=name,
-            unit=unit,
-            brand=brand,
-            category=category,
-        )
-    except IntegrityError:
-        raise ValidationError({"name": "Este produto já existe."})
+    from apps.shopping.services import create_product
+
+    product = create_product(
+        household=member.household,
+        actor=request.user,
+        name=request.data.get("name", ""),
+        unit=request.data.get("unit", ""),
+        brand=request.data.get("brand", ""),
+        category=request.data.get("category", ""),
+    )
     return Response(_product(product), status=201)
 
 
@@ -118,18 +98,11 @@ def alias(request, product_id):
     if not product:
         raise NotFound()
     require_membership(request.user, product.household_id, write=True)
-    try:
-        alias_value = _text(request.data.get("alias", ""), 120).strip()
-    except ValueError:
-        raise ValidationError({"alias": "Alias inválido ou muito longo."})
-    if not alias_value:
-        raise ValidationError({"alias": "Informe um alias."})
-    if len(alias_value) > 120:
-        raise ValidationError({"alias": "Alias muito longo."})
-    try:
-        obj = ProductAlias.objects.create(product=product, alias=alias_value)
-    except IntegrityError:
-        raise ValidationError({"alias": "Este alias já existe para o produto."})
+    from apps.shopping.services import add_alias
+
+    obj = add_alias(
+        product=product, actor=request.user, alias=request.data.get("alias", "")
+    )
     return Response(
         {"id": obj.id, "product_id": product.id, "alias": obj.alias}, status=201
     )
@@ -153,14 +126,16 @@ def price_observation(request, household_id):
         raise ValidationError(
             {"detail": "Produto, preço, quantidade ou unidade inválidos."}
         )
-    obs = PriceObservation.objects.create(
+    from apps.shopping.services import record_price
+
+    obs = record_price(
         household=member.household,
         product=product,
+        actor=request.user,
         price_minor=price,
-        quantity=quantity,
+        quantity_value=quantity,
         unit=unit,
         store_name=store_name,
-        source=PriceObservation.Source.MANUAL,
     )
     return Response({"id": obs.id, "source": obs.source}, status=201)
 
@@ -242,13 +217,15 @@ def list_items(request, list_id):
             raise ValueError
     except (KeyError, ValueError, TypeError, InvalidOperation, Product.DoesNotExist):
         raise ValidationError({"detail": "Item, quantidade ou unidade inválidos."})
-    item = ShoppingListItem.objects.create(
+    from apps.shopping.services import add_list_item
+
+    item = add_list_item(
         shopping_list=obj,
+        actor=request.user,
         product=product,
         free_text_name=free,
-        quantity=quantity,
+        quantity_value=quantity,
         unit=unit,
-        added_by=request.user,
         priority=priority,
     )
     return Response(
@@ -273,16 +250,19 @@ def patch_list_item(request, item_id):
     if not item:
         raise NotFound()
     require_membership(request.user, item.shopping_list.household_id, write=True)
+    payload = {}
     if "status" in request.data:
         if request.data["status"] not in ShoppingListItem.Status.values:
             raise ValidationError({"status": "Status inválido."})
-        item.status = request.data["status"]
+        payload["status"] = request.data["status"]
     if "quantity" in request.data:
         try:
-            item.quantity = _quantity(request.data["quantity"])
+            payload["quantity"] = _quantity(request.data["quantity"])
         except (InvalidOperation, ValueError, TypeError):
             raise ValidationError({"quantity": "Quantidade inválida."})
-    item.save()
+    from apps.shopping.services import update_list_item
+
+    item = update_list_item(item=item, actor=request.user, payload=payload)
     return Response(
         {"id": item.id, "status": item.status, "quantity": str(item.quantity)}
     )
@@ -305,176 +285,30 @@ def purchases(request, household_id):
         raise ValidationError(
             {"Idempotency-Key": "Informe uma chave de idempotência válida."}
         )
+    from hashlib import sha256
+
     canonical = json.dumps(
         request.data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
-    digest = hashlib.sha256(canonical.encode()).hexdigest()
-    try:
-        rows = request.data["items"]
-        if not isinstance(rows, list) or not rows:
-            raise ValueError
-        parsed, total = [], 0
-        for row in rows:
-            product = Product.objects.get(
-                pk=row["product_id"], household=member.household, is_active=True
-            )
-            quantity = _quantity(row["quantity"])
-            unit = str(row["unit"])
-            price = _positive_integer(row["unit_price_minor"])
-            if unit != product.unit:
-                raise ValueError
-            line = int(
-                (Decimal(price) * quantity).quantize(
-                    Decimal("1"), rounding=ROUND_HALF_UP
-                )
-            )
-            if (
-                "line_total_minor" in row
-                and _positive_integer(row["line_total_minor"]) != line
-            ):
-                raise ValueError
-            parsed.append(
-                (product, quantity, unit, price, line, row.get("shopping_list_item_id"))
-            )
-            total += line
-        purchased_at = date.fromisoformat(request.data["purchased_at"])
-        if total <= 0:
-            raise ValueError
-        list_obj = None
-        if request.data.get("shopping_list_id"):
-            list_obj = ShoppingList.objects.get(
-                pk=request.data["shopping_list_id"], household=member.household
-            )
-        store_name = _text(request.data.get("store_name", ""), 120)
-    except (
-        KeyError,
-        ValueError,
-        TypeError,
-        InvalidOperation,
-        Product.DoesNotExist,
-        ShoppingList.DoesNotExist,
-    ):
-        raise ValidationError(
-            {"detail": "Linhas, quantidades, totais, data ou lista inválidos."}
-        )
-    with transaction.atomic():
-        from apps.households.models import Household
+    digest = sha256(canonical.encode()).hexdigest()
+    from apps.shopping.services import create_purchase
 
-        Household.objects.select_for_update().get(pk=member.household_id)
-        existing = Purchase.objects.filter(
-            household=member.household, idempotency_key=key
-        ).first()
-        if existing:
-            if existing.payload_hash != digest:
-                raise Conflict()
-            return Response(_purchase_result(existing), status=200)
-        category, _ = ExpenseCategory.objects.get_or_create(
-            household=member.household, name="Compras", defaults={"kind": "general"}
-        )
-        expense = Expense.objects.create(
-            household=member.household,
-            description=f"Compra - {store_name or 'Mercado'}",
-            category=category,
-            amount_minor=total,
-            currency=member.household.currency,
-            incurred_on=purchased_at,
-            created_by=request.user,
-        )
-        active = list(
-            Membership.objects.filter(
-                household=member.household, status="active"
-            ).order_by("id")
-        )
-        base, rem = divmod(total, len(active))
-        ExpenseSplit.objects.bulk_create(
-            [
-                ExpenseSplit(
-                    expense=expense, membership=m, amount_minor=base + (index < rem)
-                )
-                for index, m in enumerate(active)
-            ]
-        )
-        Payment.objects.create(
-            household=member.household,
-            expense=expense,
-            payer=member,
-            amount_minor=total,
-            notes="Pagamento da compra",
-        )
-        purchase = Purchase.objects.create(
-            household=member.household,
-            purchased_at=purchased_at,
-            store_name=store_name,
-            total_amount_minor=total,
-            created_by=request.user,
-            buyer=member,
-            shopping_list=list_obj,
-            idempotency_key=key,
-            payload_hash=digest,
-            expense=expense,
-        )
-        for product, quantity, unit, price, line, list_item_id in parsed:
-            list_item = None
-            if list_item_id is not None:
-                if not list_obj:
-                    raise ValidationError(
-                        {"detail": "Vínculo exige uma lista de compras."}
-                    )
-                try:
-                    list_item = ShoppingListItem.objects.select_for_update().get(
-                        pk=list_item_id,
-                        shopping_list=list_obj,
-                        product=product,
-                        status=ShoppingListItem.Status.NEEDED,
-                    )
-                except ShoppingListItem.DoesNotExist:
-                    raise Conflict(
-                        "O item da lista não está mais disponível para compra."
-                    )
-            item = PurchaseItem.objects.create(
-                purchase=purchase,
-                product=product,
-                quantity=quantity,
-                unit=unit,
-                unit_price_minor=price,
-                line_total_minor=line,
-                shopping_list_item=list_item,
-            )
-            if list_item:
-                list_item.status = ShoppingListItem.Status.PURCHASED
-                list_item.save(update_fields=["status"])
-            inventory, _ = InventoryItem.objects.get_or_create(
-                household=member.household, product=product, unit=unit
-            )
-            inventory = InventoryItem.objects.select_for_update().get(pk=inventory.pk)
-            InventoryItem.objects.filter(pk=inventory.pk).update(
-                quantity=F("quantity") + quantity
-            )
-            InventoryEvent.objects.create(
-                item=inventory,
-                event_type=InventoryEvent.Type.PURCHASE,
-                quantity_delta=quantity,
-                created_by=request.user,
-                source_purchase_item=item,
-            )
-            PriceObservation.objects.create(
-                household=member.household,
-                product=product,
-                store_name=purchase.store_name,
-                price_minor=price,
-                quantity=quantity,
-                unit=unit,
-                source=PriceObservation.Source.PURCHASE,
-            )
-        AuditEvent.objects.create(
+    try:
+        purchase, created = create_purchase(
             household=member.household,
             actor=request.user,
-            action="purchase.confirmed",
-            entity_type="purchase",
-            entity_id=str(purchase.id),
-            metadata={"total_amount_minor": total, "item_count": len(parsed)},
+            buyer=member,
+            payload=request.data,
+            idempotency_key=key,
+            payload_hash=digest,
         )
-    return Response(_purchase_result(purchase), status=201)
+    except ShoppingListItem.DoesNotExist:
+        raise Conflict("O item da lista não está mais disponível para compra.")
+    except ValidationError as exc:
+        if "reutilizada" in str(exc):
+            raise Conflict()
+        raise
+    return Response(_purchase_result(purchase), status=201 if created else 200)
 
 
 @api_view(["GET"])
@@ -560,17 +394,13 @@ def inventory_event(request, item_id):
                 "detail": "Movimento inválido; ajuste exige justificativa e saldo não pode ser negativo."
             }
         )
-    with transaction.atomic():
-        item = InventoryItem.objects.select_for_update().get(pk=item_id)
-        if item.quantity + delta < 0:
-            raise ValidationError({"detail": "Saldo não pode ser negativo."})
-        item.quantity += delta
-        item.save(update_fields=["quantity"])
-        event = InventoryEvent.objects.create(
-            item=item,
-            event_type=kind,
-            quantity_delta=delta,
-            created_by=request.user,
-            notes=notes,
-        )
+    from apps.inventory.services import record_event
+
+    event, item = record_event(
+        item=initial,
+        actor=request.user,
+        event_type=kind,
+        quantity_delta=delta,
+        notes=notes,
+    )
     return Response({"id": event.id, "quantity": str(item.quantity)}, status=201)

@@ -8,6 +8,10 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.accounts.models import User
+from apps.accounts.services import (
+    create_account_deactivation_proposal,
+    confirm_account_deactivation_proposal,
+)
 
 
 def csrf_response(request):
@@ -86,3 +90,27 @@ def me(request):
     return Response(
         {"id": request.user.pk, "email": request.user.email, "name": request.user.name}
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def account_deactivation_proposals(request):
+    proposal = create_account_deactivation_proposal(request.user)
+    return Response(proposal, status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def confirm_account_deactivation(request, proposal_id):
+    if (
+        not isinstance(request.data, dict)
+        or set(request.data) != {"confirm"}
+        or not isinstance(request.data["confirm"], bool)
+    ):
+        return Response(
+            {"detail": "Provide an explicit boolean confirm value."}, status=400
+        )
+    result = confirm_account_deactivation_proposal(
+        request.user, proposal_id, request.data["confirm"]
+    )
+    return Response(result["data"], status=result["status"])

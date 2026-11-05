@@ -364,12 +364,48 @@ class AssistantRequestView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, household_id):
-        require_membership(request.user, household_id, write=True)
+        mode = request.data.get("mode", "label")
+        request_uuid = None
+        if mode == "operator":
+            raw_request_id = request.data.get("request_id")
+            try:
+                if not isinstance(raw_request_id, str):
+                    raise ValueError
+                request_uuid = uuid.UUID(raw_request_id)
+                if str(request_uuid) != raw_request_id.lower():
+                    raise ValueError
+            except (ValueError, TypeError, AttributeError):
+                from rest_framework.exceptions import ValidationError
+
+                raise ValidationError({"request_id": "A valid UUID is required."})
+        require_membership(request.user, household_id, write=mode != "operator")
         result = create_response(
             request.user,
             request.data.get("text"),
             request.data.get("image_data"),
             household_id,
-            request.data.get("mode", "label"),
+            mode,
+            request_uuid=request_uuid,
         )
         return Response(result)
+
+
+class AssistantActionProposalView(NoStoreAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, household_id, proposal_id):
+        if (
+            not isinstance(request.data, dict)
+            or set(request.data) != {"confirm"}
+            or type(request.data["confirm"]) is not bool
+        ):
+            return Response({"error": "Invalid request."}, status=400)
+        from apps.assistant.proposals import confirm_proposal
+
+        result = confirm_proposal(
+            user=request.user,
+            household_id=household_id,
+            proposal_id=proposal_id,
+            confirm=request.data["confirm"],
+        )
+        return Response(result["data"], status=result["status"])

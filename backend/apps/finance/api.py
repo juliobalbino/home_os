@@ -6,9 +6,15 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.finance.models import Budget, Expense, ExpenseCategory, ExpenseSplit
+from apps.finance.models import Budget, Expense, ExpenseCategory
 from apps.finance.selectors import monthly_summary, serialize_expense, settlements
-from apps.finance.services import create_expense, record_payment, set_budget
+from apps.finance.services import (
+    create_expense,
+    create_expense_category,
+    record_payment,
+    set_budget,
+    update_expense,
+)
 from apps.households.models import Membership
 from apps.households.permissions import require_membership
 
@@ -32,28 +38,12 @@ def categories(request):
                 ).values("id", "name", "kind")
             )
         )
-    name = str(request.data.get("name", "")).strip()
-    if not name or len(name) > 80:
-        return Response({"name": ["Informe um nome de até 80 caracteres."]}, status=400)
     with transaction.atomic():
-        category, created = ExpenseCategory.objects.get_or_create(
-            household=membership.household,
-            name=name,
-            defaults={"kind": request.data.get("kind", "general")},
-        )
-        if not created:
-            return Response(
-                {"name": ["Já existe uma categoria com este nome."]}, status=400
-            )
-        from apps.audit.models import AuditEvent
-
-        AuditEvent.objects.create(
+        category = create_expense_category(
             household=membership.household,
             actor=request.user,
-            action="category.created",
-            entity_type="expense_category",
-            entity_id=str(category.id),
-            metadata={"kind": category.kind},
+            name=request.data.get("name", ""),
+            kind=request.data.get("kind", "general"),
         )
     return Response(
         {"id": category.id, "name": category.name, "kind": category.kind}, status=201
@@ -103,50 +93,13 @@ def expense_detail(request, expense_id):
     if request.method == "GET":
         return Response(serialize_expense(expense))
     with transaction.atomic():
-        Expense.objects.select_for_update().get(pk=expense.pk)
-        rows = request.data.get("splits", [])
-        from apps.finance.services import allocate_splits
-
-        allocations = allocate_splits(
-            expense.amount_minor, rows, request.data.get("split_method", "equal")
-        )
-        active = {
-            item.id: item
-            for item in Membership.objects.filter(
-                id__in=[row[0] for row in allocations],
-                household=expense.household,
-                status="active",
-            )
-        }
-        if len(active) != len(allocations):
-            from rest_framework.exceptions import ValidationError
-
-            raise ValidationError(
-                {"splits": "Participantes inválidos para esta residência."}
-            )
-        ExpenseSplit.objects.filter(expense=expense, is_current=True).update(
-            is_current=False
-        )
-        ExpenseSplit.objects.bulk_create(
-            [
-                ExpenseSplit(
-                    expense=expense,
-                    membership=active[mid],
-                    amount_minor=amount,
-                    share_percent=percent,
-                )
-                for mid, amount, percent in allocations
-            ]
-        )
-        from apps.audit.models import AuditEvent
-
-        AuditEvent.objects.create(
-            household=expense.household,
+        update_expense(
+            expense=expense,
             actor=request.user,
-            action="expense.splits_updated",
-            entity_type="expense",
-            entity_id=str(expense.id),
-            metadata={"splits": len(allocations)},
+            payload={
+                "splits": request.data.get("splits", []),
+                "split_method": request.data.get("split_method", "equal"),
+            },
         )
     return Response(serialize_expense(expense))
 

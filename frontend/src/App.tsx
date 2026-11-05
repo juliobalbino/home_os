@@ -22,6 +22,8 @@ type Session =
 
 export default function App() {
   const [session, setSession] = useState<Session>({ state: "loading" });
+  const [selectedHouseId, setSelectedHouseId] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const route = useRoute();
 
   const refresh = useCallback(async () => {
@@ -29,6 +31,16 @@ export default function App() {
       const user = await request<User>("/me");
       const houses = list<Household>(await request<Household[]>("/households"));
       setSession({ state: "ready", user, houses });
+      setSelectedHouseId((current) => {
+        const active = houses.find((house) => !house.isArchived);
+        return (
+          active?.id ??
+          (current && houses.some((house) => house.id === current)
+            ? current
+            : null)
+        );
+      });
+      setShowOnboarding(false);
     } catch {
       setSession({ state: "anonymous" });
     }
@@ -58,19 +70,41 @@ export default function App() {
 
   const { user, houses } = session;
   // The backend allows one active membership per person.
-  const house = houses[0];
-  if (!house)
+  const archived = houses.filter((house) => house.isArchived);
+  const activeHouses = houses.filter((house) => !house.isArchived);
+  const house =
+    houses.find((item) => item.id === selectedHouseId) ?? activeHouses[0];
+  if (!house || showOnboarding)
     return (
       <Onboarding
         user={user}
         onJoined={refresh}
         onSignOut={() => void signOut()}
+        archivedHouseholds={archived}
+        onOpenArchived={(id) => {
+          setSelectedHouseId(id);
+          setShowOnboarding(false);
+        }}
       />
     );
   const timezone = house.timezone || DEFAULT_TIME_ZONE;
+  const role = house.isArchived ? "viewer" : house.role;
 
   return (
-    <AppFrame route={route} household={house} user={user}>
+    <AppFrame
+      route={route}
+      household={house}
+      user={user}
+      households={houses}
+      allowOnboarding={activeHouses.length === 0}
+      onHouseholdChange={(id) => {
+        if (id === "__onboarding__") setShowOnboarding(true);
+        else {
+          setSelectedHouseId(id);
+          setShowOnboarding(false);
+        }
+      }}
+    >
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={route}
@@ -83,32 +117,20 @@ export default function App() {
             <Dashboard
               householdId={house.id}
               householdName={house.name}
-              role={house.role}
+              role={role}
               timezone={timezone}
             >
-              <Assistant householdId={house.id} role={house.role} compact />
+              <Assistant householdId={house.id} role={role} compact />
             </Dashboard>
           )}
           {route === "financas" && (
-            <Finance
-              householdId={house.id}
-              role={house.role}
-              timezone={timezone}
-            />
+            <Finance householdId={house.id} role={role} timezone={timezone} />
           )}
           {route === "compras" && (
-            <Shopping
-              householdId={house.id}
-              role={house.role}
-              timezone={timezone}
-            />
+            <Shopping householdId={house.id} role={role} timezone={timezone} />
           )}
           {route === "tarefas" && (
-            <Chores
-              householdId={house.id}
-              role={house.role}
-              timezone={timezone}
-            />
+            <Chores householdId={house.id} role={role} timezone={timezone} />
           )}
           {route === "casa" && (
             <HouseholdPage

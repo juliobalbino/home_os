@@ -19,6 +19,7 @@ export type Household = {
   name: string;
   role: Role;
   timezone?: string;
+  isArchived?: boolean;
 };
 export type Member = { id: number; name: string; role: Role };
 export type Balance = {
@@ -55,8 +56,11 @@ export async function request<T>(
     headers: { "Content-Type": "application/json", ...options.headers },
   });
   const data = await response.json();
-  if (!response.ok)
-    throw new Error(errorMessage(data, "Falha na solicitação."));
+  if (!response.ok) {
+    const error = new Error(errorMessage(data, "Falha na solicitação."));
+    Object.assign(error, { status: response.status });
+    throw error;
+  }
   return data as T;
 }
 

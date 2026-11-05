@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import User
 from apps.households.models import Household, Invitation, Membership
+from apps.audit.models import AuditEvent
 
 
 class HouseholdFlowTests(TestCase):
@@ -53,25 +54,85 @@ class HouseholdFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
+        card = response.json()
+        self.assertEqual(card["kind"], "invitation_creation")
+        self.assertTrue(card["proposal_id"])
+        self.assertNotIn("token", card)
+        self.assertEqual(Invitation.objects.count(), 0)
+
+        confirmation = self.client.post(
+            f"/api/v1/households/{household.id}/assistant/actions/{card['proposal_id']}",
+            {"confirm": True},
+            format="json",
+        )
+        self.assertEqual(confirmation.status_code, 200)
+        token = confirmation.json()["token"]
+        self.assertTrue(token)
+        self.assertIn("expiresAt", confirmation.json())
         invitation = Invitation.objects.get()
+        self.assertNotEqual(invitation.token_hash, token)
+        self.assertEqual(invitation.token_hash, Invitation.hash_token(token))
+
         accept = APIClient()
         guest = User.objects.create_user(
             email="guest@example.com", name="Guest", password="safe-password-123"
         )
         accept.force_authenticate(guest)
-        url = f"/api/v1/invitations/{response.json()['token']}/accept"
+        url = f"/api/v1/invitations/{token}/accept"
         self.assertEqual(accept.post(url, {}, format="json").status_code, 200)
         self.assertEqual(accept.post(url, {}, format="json").status_code, 404)
         self.assertEqual(
             Membership.objects.get(user=guest, household=household).role, "viewer"
         )
-        self.assertFalse(invitation.token_hash == response.json()["token"])
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.token_hash, Invitation.hash_token(token))
+        self.assertEqual(invitation.token_ciphertext, "")
         self.assertEqual(
             accept.post(
                 f"/api/v1/households/{household.id}/invitations", {}, format="json"
             ).status_code,
             403,
         )
+
+    def test_invitation_proposal_can_be_cancelled_without_creating_invitation(self):
+        household = Household.objects.create(name="Casa", created_by=self.owner)
+        Membership.objects.create(household=household, user=self.owner, role="owner")
+        response = self.client.post(
+            f"/api/v1/households/{household.id}/invitations",
+            {"role": "viewer"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        proposal_id = response.json()["proposal_id"]
+
+        cancelled = self.client.post(
+            f"/api/v1/households/{household.id}/assistant/actions/{proposal_id}",
+            {"confirm": False},
+            format="json",
+        )
+
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.json().get("status"), "cancelled")
+        self.assertEqual(Invitation.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+
+    def test_invitation_proposal_rejects_invalid_role_without_creating_invitation(self):
+        household = Household.objects.create(name="Casa", created_by=self.owner)
+        Membership.objects.create(household=household, user=self.owner, role="owner")
+
+        response = self.client.post(
+            f"/api/v1/households/{household.id}/invitations",
+            {"role": "owner"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Invitation.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.count(), 0)
+        from django.apps import apps
+
+        proposal_model = apps.get_model("assistant", "AssistantActionProposal")
+        self.assertFalse(proposal_model.objects.exists())
 
     def test_expired_invitation_cannot_be_used(self):
         household = Household.objects.create(name="Casa", created_by=self.owner)
@@ -115,3 +176,28 @@ class HouseholdFlowTests(TestCase):
         Membership.objects.create(household=first, user=self.owner, role="owner")
         with self.assertRaises(IntegrityError):
             Membership.objects.create(household=second, user=self.owner, role="owner")
+
+    def test_removed_member_can_rejoin_same_household_with_new_invitation(self):
+        household = Household.objects.create(name="Casa", created_by=self.owner)
+        guest = User.objects.create_user(
+            email="rejoining@example.com", name="Guest", password="safe-password-123"
+        )
+        membership = Membership.objects.create(
+            household=household, user=guest, role="viewer", status="removed"
+        )
+        invitation, token = Invitation.issue(household, self.owner, "member")
+        client = APIClient()
+        client.force_authenticate(guest)
+
+        response = client.post(f"/api/v1/invitations/{token}/accept", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        memberships = Membership.objects.filter(household=household, user=guest)
+        self.assertEqual(memberships.count(), 1)
+        membership.refresh_from_db()
+        self.assertEqual(membership.pk, memberships.get().pk)
+        self.assertEqual(membership.status, "active")
+        self.assertEqual(membership.role, "member")
+        invitation.refresh_from_db()
+        self.assertIsNotNone(invitation.accepted_at)
+        self.assertEqual(invitation.token_ciphertext, "")

@@ -226,6 +226,107 @@ describe("authenticated account interface", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("selects an archived household in read-only mode while retaining its members", async () => {
+    signedIn(
+      [
+        {
+          id: "old",
+          name: "Casa antiga",
+          role: "owner",
+          isArchived: true,
+        },
+        {
+          id: "new",
+          name: "Casa atual",
+          role: "member",
+          isArchived: false,
+        },
+      ],
+      (url) => {
+        if (url.endsWith("/households/old/members"))
+          return new Response(
+            JSON.stringify([
+              { id: 1, name: "Ana", role: "owner" },
+              { id: 2, name: "Bia", role: "member" },
+            ]),
+          );
+        if (url.endsWith("/households/new/members"))
+          return new Response(JSON.stringify([]));
+        return undefined;
+      },
+    );
+    window.location.hash = "#/casa";
+    render(<App />);
+
+    const householdSelector = await screen.findByRole("combobox", {
+      name: "Residência",
+    });
+    expect(householdSelector).toHaveValue("new");
+
+    fireEvent.change(householdSelector, { target: { value: "old" } });
+
+    expect(
+      await screen.findByText("Casa antiga — arquivada (somente leitura)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/somente leitura/i)).toBeInTheDocument();
+    expect(await screen.findAllByText("Ana")).toHaveLength(3);
+    expect(screen.getByText("Bia")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Criar convite" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens an archived household from onboarding and returns to onboarding", async () => {
+    signedIn(
+      [
+        {
+          id: "old",
+          name: "Casa antiga",
+          role: "owner",
+          isArchived: true,
+        },
+      ],
+      (url) => {
+        if (url.endsWith("/households/old/members"))
+          return new Response(
+            JSON.stringify([{ id: 1, name: "Ana", role: "owner" }]),
+          );
+        return undefined;
+      },
+    );
+    render(<App />);
+
+    expect(
+      await screen.findByLabelText("Criar residência"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Aceitar convite")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Residências arquivadas" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Abrir residência arquivada Casa antiga",
+      }),
+    );
+
+    expect(
+      await screen.findByText("Casa antiga — arquivada (somente leitura)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/somente leitura/i)).toBeInTheDocument();
+    const householdSelector = screen.getByRole("combobox", {
+      name: "Residência",
+    });
+    expect(householdSelector).toHaveValue("old");
+    fireEvent.change(householdSelector, {
+      target: { value: "__onboarding__" },
+    });
+
+    expect(
+      await screen.findByLabelText("Criar residência"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Aceitar convite")).toBeInTheDocument();
+  });
+
   it("validates registration passwords as six or more alphanumeric characters", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "unauthorized" }), {
@@ -250,7 +351,7 @@ describe("authenticated account interface", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("creates a one-time invitation for an owner and displays the token", async () => {
+  it("confirms an invitation proposal before displaying its one-time token", async () => {
     const fetchMock = signedIn(
       [{ id: "one", name: "Casa", role: "owner" }],
       (url, init) => {
@@ -259,8 +360,28 @@ describe("authenticated account interface", () => {
         if (
           url.endsWith("/households/one/invitations") &&
           init?.method === "POST"
+        ) {
+          return new Response(
+            JSON.stringify({
+              proposal_id: "proposal-1",
+              kind: "invitation_creation",
+              title: "Criar convite",
+              summary: "Convite para um membro",
+              details: { role: "member", expires_in_days: 7 },
+            }),
+          );
+        }
+        if (
+          url.endsWith("/households/one/assistant/actions/proposal-1") &&
+          init?.method === "POST"
         )
-          return new Response(JSON.stringify({ token: "one-use-token" }));
+          return new Response(
+            JSON.stringify({
+              status: "confirmed",
+              token: "one-use-token",
+              expiresAt: "2026-11-11T00:00:00Z",
+            }),
+          );
         if (url.endsWith("/members"))
           return new Response(
             JSON.stringify([{ id: 1, name: "Ana", role: "owner" }]),
@@ -280,8 +401,78 @@ describe("authenticated account interface", () => {
       ),
     );
     expect(
+      await screen.findByText("Convite para um membro"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("proposal-1")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("one-use-token")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar convite" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/households/one/assistant/actions/proposal-1"),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ confirm: true }),
+        }),
+      ),
+    );
+    expect(
       await screen.findByDisplayValue("one-use-token"),
     ).toBeInTheDocument();
+  });
+
+  it("cancels an invitation proposal without displaying a token", async () => {
+    const fetchMock = signedIn(
+      [{ id: "one", name: "Casa", role: "owner" }],
+      (url, init) => {
+        if (url.endsWith("/auth/csrf"))
+          return new Response(JSON.stringify({ csrfToken: "csrf" }));
+        if (
+          url.endsWith("/households/one/invitations") &&
+          init?.method === "POST"
+        )
+          return new Response(
+            JSON.stringify({
+              proposal_id: "proposal-1",
+              kind: "invitation_creation",
+              title: "Criar convite",
+              summary: "Convite para um membro",
+              details: { role: "member", expires_in_days: 7 },
+            }),
+          );
+        if (
+          url.endsWith("/households/one/assistant/actions/proposal-1") &&
+          init?.method === "POST"
+        )
+          return new Response(JSON.stringify({ status: "cancelled" }));
+        if (url.endsWith("/members"))
+          return new Response(
+            JSON.stringify([{ id: 1, name: "Ana", role: "owner" }]),
+          );
+        return undefined;
+      },
+    );
+    window.location.hash = "#/casa";
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Criar convite" }),
+    );
+    expect(
+      await screen.findByText("Convite para um membro"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar convite" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/households/one/assistant/actions/proposal-1"),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ confirm: false }),
+        }),
+      ),
+    );
+    expect(await screen.findByText(/convite.*cancelad/i)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("one-use-token")).not.toBeInTheDocument();
   });
 
   it("switches areas through the hash route", async () => {

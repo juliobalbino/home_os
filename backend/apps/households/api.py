@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from apps.households.models import Household, Invitation, Membership
 from apps.households.permissions import require_membership
 from apps.accounts.models import User
+from apps.assistant.proposals import create_invitation_creation
 
 
 def serialize(household, membership):
@@ -16,6 +17,7 @@ def serialize(household, membership):
         "currency": household.currency,
         "timezone": household.timezone,
         "role": membership.role,
+        "isArchived": household.is_archived,
     }
 
 
@@ -24,7 +26,7 @@ def serialize(household, membership):
 def households(request):
     if request.method == "GET":
         memberships = Membership.objects.filter(
-            user=request.user, status="active"
+            user=request.user, status__in=("active", "archived")
         ).select_related("household")
         return Response([serialize(m.household, m) for m in memberships])
     name = str(request.data.get("name", "")).strip()
@@ -60,7 +62,7 @@ def household_detail(request, household_id):
 def members(request, household_id):
     require_membership(request.user, household_id)
     qs = Membership.objects.filter(
-        household_id=household_id, status="active"
+        household_id=household_id, status__in=("active", "archived")
     ).select_related("user")
     return Response(
         [
@@ -77,10 +79,10 @@ def invitations(request, household_id):
     role = request.data.get("role", "member")
     if role not in ("member", "viewer"):
         return Response({"role": ["Papel inválido."]}, status=400)
-    invitation, token = Invitation.issue(
-        Household.objects.get(pk=household_id), request.user, role
+    proposal = create_invitation_creation(
+        user=request.user, household_id=household_id, role=role
     )
-    return Response({"token": token, "expiresAt": invitation.expires_at}, status=201)
+    return Response(proposal, status=201)
 
 
 @api_view(["POST"])
@@ -94,6 +96,7 @@ def accept_invitation(request, token):
             .filter(
                 token_hash=digest,
                 accepted_at__isnull=True,
+                revoked_at__isnull=True,
                 expires_at__gt=timezone.now(),
             )
             .first()
@@ -102,6 +105,11 @@ def accept_invitation(request, token):
             return Response(
                 {"detail": "Convite inválido, expirado ou já utilizado."}, status=404
             )
+        household = Household.objects.select_for_update().get(
+            pk=invitation.household_id
+        )
+        if household.is_archived:
+            return Response({"detail": "Esta residência está arquivada."}, status=409)
         if (
             Membership.objects.filter(user=request.user, status="active")
             .exclude(household_id=invitation.household_id)
@@ -113,17 +121,30 @@ def accept_invitation(request, token):
                 },
                 status=409,
             )
-        membership, created = Membership.objects.get_or_create(
-            household=invitation.household,
-            user=request.user,
-            defaults={"role": invitation.role, "status": "active"},
+        membership = (
+            Membership.objects.select_for_update()
+            .filter(household=invitation.household, user=request.user)
+            .first()
         )
-        if not created:
+        if membership is not None and membership.status == "active":
             return Response(
                 {"detail": "Você já participa desta residência."}, status=409
             )
+        if membership is None:
+            Membership.objects.create(
+                household=invitation.household,
+                user=request.user,
+                role=invitation.role,
+                status="active",
+            )
+        else:
+            membership.role = invitation.role
+            membership.status = "active"
+            membership.joined_at = timezone.now()
+            membership.save(update_fields=["role", "status", "joined_at"])
         invitation.accepted_at = timezone.now()
-        invitation.save(update_fields=["accepted_at"])
+        invitation.token_ciphertext = ""
+        invitation.save(update_fields=["accepted_at", "token_ciphertext"])
     return Response(
         {"householdId": str(invitation.household_id), "role": invitation.role}
     )

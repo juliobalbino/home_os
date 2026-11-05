@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { motion } from "motion/react";
-import { Text } from "@mantine/core";
+import { NativeSelect, Text } from "@mantine/core";
 import { href } from "../lib/route";
 import type { Route } from "../lib/route";
 import type { Household, User } from "../lib/api";
@@ -24,11 +24,17 @@ export function AppFrame({
   household,
   user,
   children,
+  onHouseholdChange,
+  households = [household],
+  allowOnboarding = false,
 }: {
   route: Route;
   household: Household;
   user: User;
   children: ReactNode;
+  onHouseholdChange?: (id: string) => void;
+  households?: Household[];
+  allowOnboarding?: boolean;
 }) {
   return (
     <div className="frame">
@@ -40,9 +46,30 @@ export function AppFrame({
           <TileMark motif="estrela" size={30} />
           <span>Home OS</span>
         </a>
-        <Text size="sm" c="dimmed" className="frame-house" truncate>
-          {household.name}
-        </Text>
+        <div className="frame-household-control">
+          <NativeSelect
+            aria-label="Residência"
+            className="frame-house"
+            value={household.id}
+            onChange={(event) => onHouseholdChange?.(event.currentTarget.value)}
+            data={[
+              ...households.map((item) => ({
+                value: item.id,
+                label: item.isArchived
+                  ? `${item.name} — arquivada (somente leitura)`
+                  : item.name,
+              })),
+              ...(allowOnboarding
+                ? [
+                    {
+                      value: "__onboarding__",
+                      label: "Criar/entrar em outra residência",
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
       </header>
       <nav className="frame-nav" aria-label="Principal">
         <ul>
@@ -82,9 +109,6 @@ export function AppFrame({
         <div className="frame-user">
           <Text size="sm" fw={600} truncate>
             {user.name}
-          </Text>
-          <Text size="xs" truncate className="frame-user-house">
-            {household.name}
           </Text>
         </div>
       </nav>

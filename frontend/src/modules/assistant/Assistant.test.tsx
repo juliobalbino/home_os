@@ -40,6 +40,178 @@ describe("Assistant", () => {
     );
   });
 
+  const proposalResponse = {
+    text: "Lista pronta para exclusão",
+    candidates: null,
+    requires_confirmation: true,
+    actions: [
+      {
+        proposal_id: "proposal-secret-123",
+        kind: "delete_shopping_list",
+        title: "Excluir lista de compras",
+        summary: "Remover a lista e seus itens",
+        details: {
+          list: { name: "Mercado de sábado", status: "active" },
+          items: [
+            {
+              id: "item-1",
+              product_name: "Leite",
+              free_text_name: null,
+              quantity: 2,
+              unit: "litros",
+              status: "pending",
+            },
+            {
+              id: "item-2",
+              product_name: null,
+              free_text_name: "Pão integral",
+              quantity: 1,
+              unit: "unidade",
+              status: "checked",
+            },
+          ],
+        },
+        expires_at: "2030-01-01T00:00:00Z",
+      },
+    ],
+  };
+
+  function mockProposalFetch() {
+    return vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/assistant/status"))
+          return new Response(
+            JSON.stringify({
+              enabled: true,
+              connected: true,
+              status: "connected",
+            }),
+            { status: 200 },
+          );
+        if (url.endsWith("/auth/csrf"))
+          return new Response(
+            JSON.stringify({ csrfToken: "fake-csrf-token" }),
+            {
+              status: 200,
+            },
+          );
+        if (url.endsWith("/assistant") && method === "POST")
+          return new Response(JSON.stringify(proposalResponse), {
+            status: 200,
+          });
+        if (
+          url.endsWith("/assistant/actions/proposal-secret-123") &&
+          method === "POST"
+        )
+          return new Response(JSON.stringify({ status: "completed" }), {
+            status: 200,
+          });
+        throw new Error(`Unexpected fetch: ${method} ${url}`);
+      });
+  }
+
+  async function requestProposal() {
+    await screen.findByText(/conectado à sua conta chatgpt/i);
+    fireEvent.change(screen.getByLabelText(/pergunta/i), {
+      target: { value: "Excluir a lista Mercado de sábado" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /analisar/i }));
+    return screen.findByRole("button", { name: "Confirmar exclusão" });
+  }
+
+  it("renders explicit deletion proposal details and accessible confirmation controls", async () => {
+    mockProposalFetch();
+    render(<Assistant householdId="h-1" role="member" />);
+    await requestProposal();
+
+    expect(screen.getByText("Excluir lista de compras")).toBeInTheDocument();
+    expect(screen.getByText("Mercado de sábado")).toBeInTheDocument();
+    expect(screen.getByText(/Leite/)).toBeInTheDocument();
+    expect(screen.getByText(/2 litros/)).toBeInTheDocument();
+    expect(screen.getByText(/pending/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pão integral/)).toBeInTheDocument();
+    expect(screen.getByText(/1 unidade/)).toBeInTheDocument();
+    expect(screen.getByText(/checked/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/nenhuma alteração foi feita/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Confirmar exclusão" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Cancelar proposta" }),
+    ).toBeEnabled();
+    expect(document.body).not.toHaveTextContent(
+      /proposal-secret-123|fake-csrf-token/,
+    );
+  });
+
+  it("confirms a deletion proposal with CSRF and reports completion", async () => {
+    const fetchMock = mockProposalFetch();
+    render(<Assistant householdId="h-1" role="member" />);
+    await requestProposal();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar exclusão" }));
+
+    expect(
+      await screen.findByText(/exclusão concluída|excluída com sucesso/i),
+    ).toBeInTheDocument();
+    const actionCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith(
+          "/households/h-1/assistant/actions/proposal-secret-123",
+        ) && init?.method === "POST",
+    );
+    expect(actionCall).toBeDefined();
+    expect(actionCall?.[1]?.headers).toMatchObject({
+      "X-CSRFToken": "fake-csrf-token",
+    });
+    expect(JSON.parse(String(actionCall?.[1]?.body))).toEqual({
+      confirm: true,
+    });
+  });
+
+  it("cancels a deletion proposal without confirming it", async () => {
+    const fetchMock = mockProposalFetch();
+    render(<Assistant householdId="h-1" role="member" />);
+    await requestProposal();
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar proposta" }));
+
+    expect(await screen.findByText(/proposta cancelada/i)).toBeInTheDocument();
+    const actionCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith(
+          "/households/h-1/assistant/actions/proposal-secret-123",
+        ) && init?.method === "POST",
+    );
+    expect(actionCall).toBeDefined();
+    expect(JSON.parse(String(actionCall?.[1]?.body))).toEqual({
+      confirm: false,
+    });
+    expect(
+      screen.queryByText(/exclusão concluída|excluída com sucesso/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears a pending proposal when the household changes", async () => {
+    mockProposalFetch();
+    const view = render(<Assistant householdId="h-1" role="member" />);
+    await requestProposal();
+
+    view.rerender(<Assistant householdId="h-2" role="member" />);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("Excluir lista de compras"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Confirmar exclusão" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("does not show a request action to viewers", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ enabled: false, connected: false }), {

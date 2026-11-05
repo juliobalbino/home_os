@@ -1,4 +1,5 @@
 import hashlib
+import base64
 import secrets
 import uuid
 from datetime import timedelta
@@ -7,6 +8,7 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from cryptography.fernet import Fernet
 
 
 class Household(models.Model):
@@ -20,6 +22,18 @@ class Household(models.Model):
         related_name="created_households",
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="archived_households",
+    )
+
+    @property
+    def is_archived(self):
+        return self.archived_at is not None
 
 
 class Membership(models.Model):
@@ -63,6 +77,8 @@ class Invitation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     accepted_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    token_ciphertext = models.TextField(blank=True, default="")
 
     @staticmethod
     def hash_token(token):
@@ -76,6 +92,24 @@ class Invitation(models.Model):
             created_by=user,
             role=role,
             token_hash=cls.hash_token(token),
+            token_ciphertext=cls._fernet().encrypt(token.encode()).decode(),
             expires_at=timezone.now() + timedelta(days=7),
         )
         return invitation, token
+
+    @staticmethod
+    def _fernet():
+        key = hashlib.sha256(
+            b"homeos.invitation.token.v1\0" + settings.SECRET_KEY.encode()
+        ).digest()
+        return Fernet(base64.urlsafe_b64encode(key))
+
+    def get_token(self):
+        if (
+            self.accepted_at is not None
+            or self.revoked_at is not None
+            or self.expires_at <= timezone.now()
+            or not self.token_ciphertext
+        ):
+            return None
+        return self._fernet().decrypt(self.token_ciphertext.encode()).decode()

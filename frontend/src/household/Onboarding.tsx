@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import { Button, Group, Text, TextInput, Title } from "@mantine/core";
 import { IconDoorEnter, IconHomePlus } from "@tabler/icons-react";
 import { reason, send } from "../lib/api";
-import type { User } from "../lib/api";
+import type { Household, User } from "../lib/api";
 import { TileMark, TileRun } from "../ui/Tile";
 import { ErrorNote } from "../ui/parts";
 
@@ -12,10 +12,14 @@ export function Onboarding({
   user,
   onJoined,
   onSignOut,
+  archivedHouseholds = [],
+  onOpenArchived,
 }: {
   user: User;
   onJoined: () => Promise<void>;
   onSignOut: () => void;
+  archivedHouseholds?: Household[];
+  onOpenArchived?: (id: string) => void;
 }) {
   const [busy, setBusy] = useState<"" | "create" | "accept">("");
   const [error, setError] = useState("");
@@ -138,6 +142,27 @@ export function Onboarding({
             </Group>
           </form>
         </div>
+        {archivedHouseholds.length > 0 && (
+          <section
+            className="archived-homes"
+            aria-labelledby="archived-heading"
+          >
+            <Title order={2} id="archived-heading">
+              Residências arquivadas
+            </Title>
+            <Group mt="sm">
+              {archivedHouseholds.map((household) => (
+                <Button
+                  key={household.id}
+                  variant="light"
+                  onClick={() => onOpenArchived?.(household.id)}
+                >
+                  Abrir residência arquivada {household.name}
+                </Button>
+              ))}
+            </Group>
+          </section>
+        )}
       </div>
     </main>
   );
