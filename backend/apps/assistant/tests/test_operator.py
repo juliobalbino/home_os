@@ -1,3 +1,6 @@
+import json
+from io import BytesIO
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from decimal import Decimal
@@ -19,6 +22,19 @@ from apps.shopping.models import (
     ShoppingList,
     ShoppingListItem,
 )
+
+
+def completed_stream(output):
+    event = {"type": "response.completed", "response": {"output": output}}
+    return BytesIO(b"data: " + json.dumps(event).encode() + b"\n\n")
+
+
+def failed_stream(code):
+    event = {
+        "type": "response.failed",
+        "response": {"id": "resp-synthetic", "error": {"code": code}},
+    }
+    return BytesIO(b"data: " + json.dumps(event).encode() + b"\n\n")
 
 
 class OperatorReadTests(TestCase):
@@ -64,29 +80,20 @@ class OperatorReadTests(TestCase):
         from unittest.mock import patch
         from apps.assistant.services import _operator_completion
 
-        payload = {
-            "output": [
-                {
-                    "type": "message",
-                    "content": [{"type": "output_text", "text": "Resumo da casa"}],
-                }
-            ]
-        }
+        output = [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Resumo da casa"}],
+            }
+        ]
+        requests = []
 
-        class Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self, _limit):
-                import json
-
-                return json.dumps(payload).encode()
+        def mocked_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data))
+            return completed_stream(output)
 
         with patch(
-            "apps.assistant.services.urllib.request.urlopen", return_value=Response()
+            "apps.assistant.services.urllib.request.urlopen", side_effect=mocked_urlopen
         ):
             answer = _operator_completion(
                 model="mock-model",
@@ -96,58 +103,61 @@ class OperatorReadTests(TestCase):
                 household_id=self.household.id,
             )
         self.assertEqual(answer, {"text": "Resumo da casa", "actions": []})
+        self.assertIs(requests[0]["stream"], True)
+        self.assertIs(requests[0]["store"], False)
+        self.assertEqual(requests[0]["input"], [{"role": "user", "content": "Resumo"}])
+
+    def test_operator_stream_failure_reports_plan_limit_without_writing(self):
+        from unittest.mock import patch
+        from apps.assistant.services import AssistantUnavailable, _operator_completion
+
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen",
+            return_value=failed_stream("subscription_sharing_usage_limit_exceeded"),
+        ):
+            with self.assertRaisesMessage(AssistantUnavailable, "Limite do plano"):
+                _operator_completion(
+                    model="mock-model",
+                    token="synthetic-token",
+                    text="Adicione arroz à lista",
+                    user=self.owner,
+                    household_id=self.household.id,
+                )
+        self.assertFalse(ShoppingList.objects.exists())
 
     def test_operator_returns_confirmed_action_proposal_without_deleting_list(self):
-        import json
         from unittest.mock import patch
         from apps.assistant.services import _operator_completion
 
         shopping_list = ShoppingList.objects.create(
             household=self.household, name="Synthetic groceries", created_by=self.owner
         )
-        responses = [
-            {
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "call-proposal-1",
-                        "name": "propose_shopping_list_deletion",
-                        "arguments": json.dumps({"shopping_list_id": shopping_list.pk}),
-                    }
-                ]
-            },
-            {
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [
-                            {
-                                "type": "output_text",
-                                "text": "A lista está pronta para exclusão.",
-                            }
-                        ],
-                    }
-                ]
-            },
+        outputs = [
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call-proposal-1",
+                    "name": "propose_shopping_list_deletion",
+                    "arguments": json.dumps({"shopping_list_id": shopping_list.pk}),
+                }
+            ],
+            [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "A lista está pronta para exclusão.",
+                        }
+                    ],
+                }
+            ],
         ]
         requests = []
 
-        class Response:
-            def __init__(self, payload):
-                self.payload = payload
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self, _limit):
-                return json.dumps(self.payload).encode()
-
         def mocked_urlopen(request, timeout=None):
             requests.append(json.loads(request.data))
-            return Response(responses.pop(0))
+            return completed_stream(outputs.pop(0))
 
         with patch(
             "apps.assistant.services.urllib.request.urlopen", side_effect=mocked_urlopen
@@ -180,9 +190,63 @@ class OperatorReadTests(TestCase):
         )
 
         tool_output = requests[1]["input"][-1]["output"]
+        self.assertIs(requests[1]["stream"], True)
+        self.assertEqual(
+            requests[1]["input"][0], {"role": "user", "content": "Apague a lista"}
+        )
+        self.assertEqual(requests[1]["input"][1]["type"], "function_call")
         self.assertNotIn("token", tool_output.lower())
         self.assertNotIn("credential", tool_output.lower())
         self.assertNotIn("synthetic-token", tool_output)
+
+    def test_operator_stream_adds_item_to_existing_shopping_list(self):
+        from unittest.mock import patch
+        from apps.assistant.services import _operator_completion
+
+        shopping_list = ShoppingList.objects.create(
+            household=self.household, name="Compras", created_by=self.owner
+        )
+        outputs = [
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call-add-item",
+                    "name": "add_shopping_list_item",
+                    "arguments": json.dumps(
+                        {
+                            "shopping_list_id": shopping_list.pk,
+                            "free_text_name": "Arroz",
+                            "quantity": "1",
+                            "unit": "kg",
+                        }
+                    ),
+                }
+            ],
+            [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Arroz adicionado."}],
+                }
+            ],
+        ]
+
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen",
+            side_effect=lambda request, timeout=None: completed_stream(outputs.pop(0)),
+        ):
+            result = _operator_completion(
+                model="mock-model",
+                token="synthetic-token",
+                text="Adicione 1 kg de arroz à lista de compras",
+                user=self.owner,
+                household_id=self.household.id,
+                request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            )
+        self.assertEqual(result["text"], "Arroz adicionado.")
+        self.assertEqual(
+            ShoppingListItem.objects.get(shopping_list=shopping_list).free_text_name,
+            "Arroz",
+        )
 
 
 class OperatorShoppingListWriteTests(TestCase):
