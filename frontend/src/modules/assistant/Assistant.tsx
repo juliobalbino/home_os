@@ -514,9 +514,9 @@ export default function Assistant({
               </li>
               <li>Digite o código de pareamento no auxiliar.</li>
               <li>
-                No navegador, selecione a conta ChatGPT que deseja conectar; se
-                necessário, use a opção do provedor para entrar com outra conta.
-                Conclua o login e dê consentimento.
+                No navegador, selecione sua conta ChatGPT. Ao reconectar, use a
+                mesma conta da conexão anterior. Conclua o login e, quando
+                solicitado, autorize o acesso.
               </li>
             </ol>
             <Text size="sm" mb="sm">

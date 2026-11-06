@@ -63,10 +63,12 @@ def validate_authorization_url(url, redirect_uri):
             if key in params:
                 raise ValueError
             params[key] = value
+        client_id = params.get("client_id", "")
         if (
             "id_token_hint" in params
             or "login_hint" in params
-            or params.get("client_id") != "dynamic_agent_client"
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,200}", client_id, flags=re.ASCII) is None
+            or (client_id != "dynamic_agent_client" and "agent_name_hint" in params)
             or params.get("redirect_uri") != redirect_uri
             or params.get("resource") != "https://api.openai.com/v1"
             or params.get("response_type") != "code"
@@ -133,7 +135,7 @@ def parse_callback(callback, expected_state):
             ):
                 raise HelperError("Invalid authorization callback.")
             return {"state": state, "error": error}
-        if not code or not client_id:
+        if not code:
             raise HelperError("Invalid authorization callback.")
         return {"state": state, "code": code, "client_id": client_id}
     except (TypeError, ValueError):
@@ -244,6 +246,7 @@ def run_connect(
         validate_authorization_url(auth_url, redirect_uri)
         parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(auth_url).query)
         expected_state = parsed["state"][0]
+        selected_client_id = parsed["client_id"][0]
         if isinstance(callback, LocalCallbackServer):
             callback.expected_state = expected_state
         opener = browser_open or webbrowser.open
@@ -254,12 +257,24 @@ def run_connect(
         if result.get("error"):
             payload = {"state": expected_state, "error": result["error"]}
         else:
-            if not result.get("code") or not result.get("client_id"):
+            callback_client_id = result.get("client_id")
+            if (
+                not result.get("code")
+                or (
+                    selected_client_id == "dynamic_agent_client"
+                    and not callback_client_id
+                )
+                or (
+                    selected_client_id != "dynamic_agent_client"
+                    and callback_client_id
+                    and callback_client_id != selected_client_id
+                )
+            ):
                 raise HelperError("Invalid authorization callback.")
             payload = {
                 "authorization_code": result["code"],
                 "state": expected_state,
-                "client_id": result["client_id"],
+                "client_id": callback_client_id or selected_client_id,
             }
         completion = http_post(
             server + "/api/v1/assistant/connect/pairings/complete",

@@ -53,6 +53,7 @@ class AssistantApiTests(TestCase):
         self.assertEqual(claimed.status_code, 200)
         pairing.refresh_from_db()
         payload = claimed.json()
+        self.last_authorization_url = payload["authorization_url"]
         state = parse_qs(urlparse(payload["authorization_url"]).query)["state"][0]
         return pairing, payload["helper_token"], state
 
@@ -413,6 +414,119 @@ class AssistantApiTests(TestCase):
             format="json",
         )
         self.assertEqual(replay.status_code, 410)
+
+    @override_settings(
+        ASSISTANT_ENABLED=True,
+        ASSISTANT_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
+    @patch("apps.assistant.views.exchange_and_validate")
+    def test_reconnect_reuses_saved_registration_for_same_account(self, exchange):
+        previous = ChatGPTConnection.objects.create(
+            user=self.owner,
+            client_id="oaiapp_existing",
+            account_subject="original-account",
+            host_id="urn:uuid:existing-host",
+            status="revoked",
+        )
+        pairing, helper_token, state = self._claimed_pairing()
+        self.assertEqual(pairing.host_id, previous.host_id)
+        query = parse_qs(urlparse(self.last_authorization_url).query)
+        self.assertEqual(query["client_id"], [previous.client_id])
+        self.assertEqual(query["ext_agent_host_id"], [previous.host_id])
+        self.assertNotIn("agent_name_hint", query)
+        pending = pairing.get_pending()
+        self.assertEqual(pending["client_id"], previous.client_id)
+        self.assertEqual(pending["account_subject"], previous.account_subject)
+        exchange.return_value = (
+            {"sub": previous.account_subject},
+            {"access_token": "new-access", "refresh_token": "new-refresh"},
+            ["openid", "chatgpt.tokens.use.direct"],
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {helper_token}")
+        completed = self.client.post(
+            "/api/v1/assistant/connect/pairings/complete",
+            {
+                "authorization_code": "new-code",
+                "state": state,
+                "client_id": previous.client_id,
+            },
+            format="json",
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(ChatGPTConnection.objects.filter(user=self.owner).count(), 1)
+        previous.refresh_from_db()
+        self.assertEqual(previous.get_credentials()["access_token"], "new-access")
+
+    @override_settings(
+        ASSISTANT_ENABLED=True,
+        ASSISTANT_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
+    @patch("apps.assistant.views.exchange_and_validate")
+    def test_reconnect_rejects_other_account_and_client_id(self, exchange):
+        previous = ChatGPTConnection.objects.create(
+            user=self.owner,
+            client_id="oaiapp_existing",
+            account_subject="original-account",
+            host_id="urn:uuid:existing-host",
+            status="revoked",
+        )
+        pairing, helper_token, state = self._claimed_pairing()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {helper_token}")
+        url = "/api/v1/assistant/connect/pairings/complete"
+        swapped = self.client.post(
+            url,
+            {"authorization_code": "code", "state": state, "client_id": "oaiapp_other"},
+            format="json",
+        )
+        self.assertEqual(swapped.status_code, 400)
+        exchange.assert_not_called()
+        exchange.return_value = (
+            {"sub": "other-account"},
+            {"access_token": "other-access"},
+            ["openid", "chatgpt.tokens.use.direct"],
+        )
+        wrong_account = self.client.post(
+            url,
+            {
+                "authorization_code": "code",
+                "state": state,
+                "client_id": previous.client_id,
+            },
+            format="json",
+        )
+        self.assertEqual(wrong_account.status_code, 502)
+        previous.refresh_from_db()
+        self.assertEqual(previous.credentials_ciphertext, "")
+        self.assertEqual(ChatGPTConnection.objects.filter(user=self.owner).count(), 1)
+
+    @override_settings(
+        ASSISTANT_ENABLED=True,
+        ASSISTANT_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
+    def test_pairing_does_not_reuse_another_users_registration(self):
+        ChatGPTConnection.objects.create(
+            user=self.owner,
+            client_id="oaiapp_owner",
+            account_subject="owner-account",
+            host_id="urn:uuid:shared-host",
+            status="revoked",
+        )
+        self.client.force_authenticate(self.viewer)
+        started = self.client.post(
+            "/api/v1/assistant/connect/pairings", {}, format="json"
+        )
+        self.client.force_authenticate(user=None)
+        claimed = self.client.post(
+            "/api/v1/assistant/connect/pairings/claim",
+            {
+                "pairing_code": started.data["pairing_code"],
+                "redirect_uri": "http://127.0.0.1:1455/auth/callback",
+            },
+            format="json",
+        )
+        self.assertEqual(claimed.status_code, 200)
+        query = parse_qs(urlparse(claimed.data["authorization_url"]).query)
+        self.assertEqual(query["client_id"], ["dynamic_agent_client"])
 
     @override_settings(
         ASSISTANT_ENABLED=True,

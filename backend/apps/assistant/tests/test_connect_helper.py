@@ -15,10 +15,10 @@ from apps.assistant.connect_helper import (
 )
 
 
-def build_authorization_url(redirect_uri, state):
+def build_authorization_url(redirect_uri, state, client_id="dynamic_agent_client"):
     params = {
         "response_type": "code",
-        "client_id": "dynamic_agent_client",
+        "client_id": client_id,
         "redirect_uri": redirect_uri,
         "state": state,
         "nonce": "test-nonce",
@@ -69,6 +69,12 @@ class ConnectHelperValidationTests(SimpleTestCase):
             + urllib.parse.urlencode(params)
         )
         self.assertEqual(validate_authorization_url(url, redirect_uri), url)
+        returning_url = build_authorization_url(
+            redirect_uri, "state-value", client_id="oaiapp_existing"
+        )
+        self.assertEqual(
+            validate_authorization_url(returning_url, redirect_uri), returning_url
+        )
         parsed_url = urllib.parse.urlsplit(url)
         query_params = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
 
@@ -93,7 +99,7 @@ class ConnectHelperValidationTests(SimpleTestCase):
             urllib.parse.urlunsplit(variant) for variant in trusted_origin_variants
         ] + [
             mutate_params(redirect_uri="http://127.0.0.1:1456/auth/callback"),
-            mutate_params(client_id="other-client"),
+            mutate_params(client_id="bad client id!"),
             mutate_params(state=""),
             mutate_params(nonce=""),
             mutate_params(code_challenge_method="plain"),
@@ -117,11 +123,15 @@ class CallbackParsingTests(SimpleTestCase):
         parsed = parse_callback(callback, "expected")
         self.assertEqual(parsed["code"], "sample-code")
         self.assertEqual(parsed["client_id"], "sample-client")
+        returning = parse_callback(
+            "http://127.0.0.1:1455/auth/callback?state=expected&code=sample-code",
+            "expected",
+        )
+        self.assertIsNone(returning["client_id"])
 
         invalid = (
             "http://127.0.0.1:1455/auth/callback?state=wrong&code=sample-code&client_id=sample-client",
             "http://127.0.0.1:1455/auth/callback?state=expected&client_id=sample-client",
-            "http://127.0.0.1:1455/auth/callback?state=expected&code=sample-code",
         )
         for value in invalid:
             with (
@@ -139,6 +149,62 @@ class CallbackParsingTests(SimpleTestCase):
 
 
 class ConnectFlowTests(SimpleTestCase):
+    def test_reconnect_uses_saved_client_when_callback_omits_client_id(self):
+        redirect_uri = "http://127.0.0.1:1455/auth/callback"
+        auth_url = build_authorization_url(
+            redirect_uri, "expected-state", client_id="oaiapp_existing"
+        )
+        requests = []
+
+        def http_post(url, *, json=None, headers=None):
+            requests.append(json)
+            return (
+                {"helper_token": "helper", "authorization_url": auth_url}
+                if len(requests) == 1
+                else {"status": "connected", "connected": True}
+            )
+
+        callback = Mock()
+        callback.redirect_uri = redirect_uri
+        callback.wait.return_value = {"state": "expected-state", "code": "code"}
+        run_connect(
+            "https://home.example.test",
+            "pairing-code",
+            http_post=http_post,
+            browser_open=Mock(),
+            callback_factory=lambda: callback,
+            output=StringIO(),
+        )
+        self.assertEqual(requests[1]["client_id"], "oaiapp_existing")
+
+    def test_reconnect_rejects_callback_for_different_client(self):
+        redirect_uri = "http://127.0.0.1:1455/auth/callback"
+        post = Mock(
+            return_value={
+                "helper_token": "helper",
+                "authorization_url": build_authorization_url(
+                    redirect_uri, "expected-state", client_id="oaiapp_existing"
+                ),
+            }
+        )
+        callback = Mock()
+        callback.redirect_uri = redirect_uri
+        callback.wait.return_value = {
+            "state": "expected-state",
+            "code": "code",
+            "client_id": "oaiapp_other",
+        }
+        with self.assertRaises((ValueError, ValidationError)):
+            run_connect(
+                "https://home.example.test",
+                "pairing-code",
+                http_post=post,
+                browser_open=Mock(),
+                callback_factory=lambda: callback,
+                output=StringIO(),
+            )
+        self.assertEqual(post.call_count, 1)
+
     def test_claim_open_callback_and_complete_flow_keeps_secrets_out_of_output(self):
         pairing_code = "pairing-secret"
         helper_token = "helper-secret"

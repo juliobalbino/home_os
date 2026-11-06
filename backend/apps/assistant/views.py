@@ -173,9 +173,24 @@ class AssistantPairingClaimView(NoStoreAPIView):
                 pairing.status = "expired"
                 pairing.save(update_fields=["status"])
                 return Response({"error": "Pairing expired."}, status=410)
-            authorization_url, pending = new_authorization(
-                pairing.host_id, redirect_uri, client_id="dynamic_agent_client"
+            registration = (
+                ChatGPTConnection.objects.filter(
+                    user=pairing.user, host_id=pairing.host_id
+                )
+                .exclude(client_id="")
+                .exclude(client_id="dynamic_agent_client")
+                .order_by("-updated_at", "-pk")
+                .first()
             )
+            selected_client_id = (
+                registration.client_id if registration else "dynamic_agent_client"
+            )
+            authorization_url, pending = new_authorization(
+                pairing.host_id, redirect_uri, client_id=selected_client_id
+            )
+            pending["client_id"] = selected_client_id
+            if registration:
+                pending["account_subject"] = registration.account_subject
             helper_token = secrets.token_urlsafe(32)
             pairing.set_pending(pending)
             pairing.helper_token_hash = hashlib.sha256(
@@ -271,12 +286,25 @@ class AssistantPairingCompleteView(NoStoreAPIView):
                     update_fields=["status", "pending_ciphertext", "helper_token_hash"]
                 )
                 return Response({"status": "cancelled", "connected": False})
+            selected_client_id = pending.get("client_id", "dynamic_agent_client")
+            if (
+                selected_client_id != "dynamic_agent_client"
+                and client_id != selected_client_id
+            ):
+                return Response({"error": "Invalid client_id."}, status=400)
+            if client_id == "dynamic_agent_client":
+                return Response({"error": "Invalid client_id."}, status=400)
             pairing.status = "completing"
             pairing.save(update_fields=["status"])
             pairing_id = pairing.pk
 
         try:
             claims, token, scopes = exchange_and_validate(code, client_id, pending)
+            expected_subject = pending.get("account_subject")
+            if expected_subject and claims.get("sub") != expected_subject:
+                raise ValueError(
+                    "The reauthorized account does not match the registration."
+                )
             token = dict(token)
             if token.get("expires_in") is not None:
                 token["expires_at"] = timezone.now().timestamp() + int(
