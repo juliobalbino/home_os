@@ -36,6 +36,33 @@ class ChatGPTConnectionTests(TestCase):
         connection.save()
         return user, connection
 
+    @patch("apps.assistant.services._operator_completion")
+    @patch("apps.assistant.services._available_model", return_value="mock-model")
+    @patch("apps.assistant.services.get_connection")
+    def test_operator_receives_optional_photo(self, get_connection, _model, completion):
+        from apps.assistant.services import create_response
+
+        user, connection = self._create_connected_assistant_user("photo@example.test")
+        get_connection.return_value = (connection, {"access_token": "synthetic-token"})
+        completion.return_value = {
+            "text": "É leite.",
+            "actions": [],
+            "applied": [],
+            "issues": [],
+        }
+        result = create_response(
+            user,
+            "O que há na foto?",
+            image_data="data:image/png;base64,iVBORw0KGgo=",
+            mode="operator",
+            request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+        )
+        self.assertEqual(result["text"], "É leite.")
+        self.assertEqual(
+            completion.call_args.kwargs["text"][1],
+            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="},
+        )
+
     @override_settings(ASSISTANT_ENABLED=True)
     @patch("apps.assistant.services.urllib.request.urlopen")
     def test_streamed_response_failures_map_known_codes_without_leaking_body(

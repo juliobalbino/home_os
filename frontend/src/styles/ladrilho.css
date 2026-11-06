@@ -828,24 +828,15 @@ textarea {
   margin-top: 10px;
 }
 
-.candidates {
-  display: grid;
-  gap: 6px;
-  margin: 12px 0 0;
+.assistant-applied,
+.assistant-issues {
+  margin-top: 12px;
 }
-.candidates div {
-  display: grid;
-  grid-template-columns: minmax(90px, 30%) 1fr;
-  gap: 12px;
-}
-.candidates dt {
-  color: var(--color-muted);
-  font-size: 0.875rem;
-}
-.candidates dd {
-  margin: 0;
-  font-weight: 600;
-  overflow-wrap: anywhere;
+
+.assistant-applied ul,
+.assistant-issues ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
 }
 
 /* ---------- Module details ---------- */
@@ -1106,9 +1097,6 @@ textarea {
   }
   .dashboard-grid .dash-finance {
     grid-column: 1 / -1;
-  }
-  .assistant-options {
-    grid-template-columns: 1fr 1fr;
   }
   .onboarding-wall {
     grid-template-columns: 1fr 1fr;

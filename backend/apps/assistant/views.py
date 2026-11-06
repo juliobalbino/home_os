@@ -392,7 +392,8 @@ class AssistantRequestView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, household_id):
-        mode = request.data.get("mode", "label")
+        mode = request.data.get("mode", "operator")
+        require_membership(request.user, household_id, write=True)
         request_uuid = None
         if mode == "operator":
             raw_request_id = request.data.get("request_id")
@@ -406,7 +407,6 @@ class AssistantRequestView(APIView):
                 from rest_framework.exceptions import ValidationError
 
                 raise ValidationError({"request_id": "A valid UUID is required."})
-        require_membership(request.user, household_id, write=mode != "operator")
         result = create_response(
             request.user,
             request.data.get("text"),

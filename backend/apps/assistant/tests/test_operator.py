@@ -7,7 +7,7 @@ from decimal import Decimal
 from datetime import date, datetime, timezone as dt_timezone
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
-from apps.assistant.operator import dispatch_tool
+from apps.assistant.operator import dispatch_tool, tool_definitions
 from apps.audit.models import AuditEvent
 from apps.chores.models import Chore, ChoreAssignment, ChoreCompletion, ChoreOccurrence
 from apps.finance.models import Budget, Expense, ExpenseCategory, ExpenseSplit, Payment
@@ -60,6 +60,14 @@ class OperatorReadTests(TestCase):
                 "arbitrary", {}, user=self.owner, household_id=self.household.id
             )
 
+    def test_tools_describe_the_data_they_read_and_change(self):
+        definitions = {item["name"]: item["description"] for item in tool_definitions()}
+        self.assertIn("shopping list", definitions["shopping_lists"].lower())
+        self.assertIn("item", definitions["add_shopping_list_item"].lower())
+        self.assertIn("expense", definitions["create_expense"].lower())
+        self.assertIn("inventory", definitions["record_inventory_event"].lower())
+        self.assertIn("chore", definitions["create_chore"].lower())
+
     def test_tool_arguments_are_strict(self):
         with self.assertRaises(ValueError):
             dispatch_tool(
@@ -102,7 +110,10 @@ class OperatorReadTests(TestCase):
                 user=self.owner,
                 household_id=self.household.id,
             )
-        self.assertEqual(answer, {"text": "Resumo da casa", "actions": []})
+        self.assertEqual(
+            answer,
+            {"text": "Resumo da casa", "actions": [], "applied": [], "issues": []},
+        )
         self.assertIs(requests[0]["stream"], True)
         self.assertIs(requests[0]["store"], False)
         self.assertEqual(requests[0]["input"], [{"role": "user", "content": "Resumo"}])
@@ -124,6 +135,124 @@ class OperatorReadTests(TestCase):
                     household_id=self.household.id,
                 )
         self.assertFalse(ShoppingList.objects.exists())
+
+    def test_operator_replays_reasoning_and_forwards_photo(self):
+        from unittest.mock import patch
+        from apps.assistant.services import _operator_completion
+
+        outputs = [
+            [{"type": "reasoning", "id": "rs_1", "summary": []}],
+            [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "É leite."}],
+                }
+            ],
+        ]
+        requests = []
+
+        def mocked_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data))
+            return completed_stream(outputs.pop(0))
+
+        content = [
+            {"type": "input_text", "text": "O que há na foto?"},
+            {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+        ]
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen", side_effect=mocked_urlopen
+        ):
+            result = _operator_completion(
+                model="mock-model",
+                token="synthetic-token",
+                text=content,
+                user=self.owner,
+                household_id=self.household.id,
+            )
+        self.assertEqual(result["text"], "É leite.")
+        self.assertEqual(requests[0]["input"][0]["content"], content)
+        self.assertEqual(requests[1]["input"][1]["type"], "reasoning")
+
+    def test_operator_reports_failed_write_without_claiming_success(self):
+        from unittest.mock import patch
+        from apps.assistant.services import _operator_completion
+
+        outputs = [
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "bad",
+                    "name": "add_shopping_list_item",
+                    "arguments": "{}",
+                }
+            ],
+            [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "Não consegui adicionar."}
+                    ],
+                }
+            ],
+        ]
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen",
+            side_effect=lambda request, timeout=None: completed_stream(outputs.pop(0)),
+        ):
+            result = _operator_completion(
+                model="mock-model",
+                token="synthetic-token",
+                text="Adicione leite",
+                user=self.owner,
+                household_id=self.household.id,
+                request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            )
+        self.assertEqual(result["applied"], [])
+        self.assertEqual(
+            result["issues"],
+            [
+                {
+                    "tool": "add_shopping_list_item",
+                    "message": "Não foi possível concluir esta alteração.",
+                }
+            ],
+        )
+
+    def test_operator_preserves_confirmed_write_when_followup_response_fails(self):
+        from unittest.mock import patch
+        from apps.assistant.services import _operator_completion
+
+        responses = [
+            completed_stream(
+                [
+                    {
+                        "type": "function_call",
+                        "call_id": "create",
+                        "name": "create_shopping_list",
+                        "arguments": '{"name":"Mercado"}',
+                    }
+                ]
+            ),
+            failed_stream("subscription_sharing_usage_unavailable"),
+        ]
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen",
+            side_effect=lambda request, timeout=None: responses.pop(0),
+        ):
+            result = _operator_completion(
+                model="mock-model",
+                token="synthetic-token",
+                text="Crie Mercado",
+                user=self.owner,
+                household_id=self.household.id,
+                request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            )
+        self.assertEqual(
+            result["applied"],
+            [{"tool": "create_shopping_list", "summary": "Lista de compras criada"}],
+        )
+        self.assertTrue(ShoppingList.objects.filter(name="Mercado").exists())
+        self.assertTrue(result["issues"])
 
     def test_operator_returns_confirmed_action_proposal_without_deleting_list(self):
         from unittest.mock import patch
@@ -243,6 +372,15 @@ class OperatorReadTests(TestCase):
                 request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
             )
         self.assertEqual(result["text"], "Arroz adicionado.")
+        self.assertEqual(
+            result["applied"],
+            [
+                {
+                    "tool": "add_shopping_list_item",
+                    "summary": "Item adicionado à lista de compras",
+                }
+            ],
+        )
         self.assertEqual(
             ShoppingListItem.objects.get(shopping_list=shopping_list).free_text_name,
             "Arroz",

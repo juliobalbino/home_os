@@ -34,6 +34,31 @@ class AssistantApiTests(TestCase):
         Membership.objects.create(user=self.viewer, household=self.house, role="viewer")
         self.client = APIClient()
 
+    @patch("apps.assistant.views.create_response")
+    def test_assistant_request_defaults_to_automatic_operator(self, create_response):
+        create_response.return_value = {
+            "text": "Feito.",
+            "actions": [],
+            "applied": [],
+            "issues": [],
+            "requires_confirmation": False,
+        }
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            f"/api/v1/households/{self.house.pk}/assistant",
+            {
+                "text": "Adicione leite",
+                "request_id": "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(create_response.call_args.args[4], "operator")
+        self.assertEqual(
+            str(create_response.call_args.kwargs["request_uuid"]),
+            "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+        )
+
     def _claimed_pairing(self):
         self.client.force_authenticate(self.owner)
         started = self.client.post(
@@ -649,7 +674,10 @@ class AssistantApiTests(TestCase):
         self.client.force_authenticate(self.viewer)
         result = self.client.post(
             f"/api/v1/households/{self.house.pk}/assistant",
-            {"text": "Ask"},
+            {
+                "text": "Ask",
+                "request_id": "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            },
             format="json",
         )
         self.assertEqual(result.status_code, 503)

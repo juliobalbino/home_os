@@ -7,7 +7,6 @@ import {
   FileInput,
   Group,
   Modal,
-  NativeSelect,
   Text,
   Textarea,
   Title,
@@ -31,9 +30,10 @@ type DisconnectResponse = {
 };
 type Result = {
   text: string;
-  candidates: Record<string, unknown> | null;
   requires_confirmation: boolean;
   actions?: ActionProposal[];
+  applied?: Array<{ tool: string; summary: string }>;
+  issues?: Array<{ tool: string; message: string }>;
 };
 type ActionProposal = {
   proposal_id: string;
@@ -93,14 +93,6 @@ function statusText(status: Status | null) {
   return status.enabled
     ? "Conecte sua conta ChatGPT usando o botão Conectar ChatGPT."
     : "A conexão com o ChatGPT ainda não foi concluída. Peça ajuda à pessoa administradora da casa.";
-}
-
-function show(value: unknown) {
-  return typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-    ? String(value)
-    : JSON.stringify(value);
 }
 
 const localizedStatus: Record<string, string> = {
@@ -179,7 +171,7 @@ function AssistantActionProposal({
             loading={busy}
             disabled={busy}
           >
-            Confirmar exclusão
+            {isDelete ? "Confirmar exclusão" : "Confirmar ação"}
           </Button>
           <Button
             variant="default"
@@ -208,7 +200,6 @@ export default function Assistant({
   const [open, setOpen] = useState(!compact);
   const [status, setStatus] = useState<Status | null>(null);
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<"text" | "label" | "operator">("label");
   const [image, setImage] = useState<File | null>(null);
   const [imageData, setImageData] = useState("");
   const [result, setResult] = useState<Result | null>(null);
@@ -345,13 +336,12 @@ export default function Assistant({
       setResult(
         await send<Result>(`/households/${householdId}/assistant`, {
           text,
-          mode,
-          ...(mode === "operator" ? { request_id: crypto.randomUUID() } : {}),
+          request_id: crypto.randomUUID(),
           ...(imageData ? { image_data: imageData } : {}),
         }),
       );
     } catch (cause) {
-      setError(reason(cause, "Não foi possível concluir a análise."));
+      setError(reason(cause, "Não foi possível concluir o pedido."));
     } finally {
       setBusy(false);
     }
@@ -374,7 +364,9 @@ export default function Assistant({
                       ...item,
                       localStatus: confirm ? "completed" : "cancelled",
                       feedback: confirm
-                        ? "Exclusão concluída com sucesso."
+                        ? proposal.kind === "delete_shopping_list"
+                          ? "Exclusão concluída com sucesso."
+                          : "Ação concluída com sucesso."
                         : "Proposta cancelada.",
                     }
                   : item,
@@ -391,7 +383,7 @@ export default function Assistant({
           ? "A proposta está desatualizada e não foi aplicada. Solicite uma nova análise."
           : code === 410
             ? "A proposta expirou e não foi aplicada. Solicite uma nova análise."
-            : "Não foi possível concluir a ação. Nenhuma exclusão foi confirmada.";
+            : "Não foi possível concluir a ação. A proposta não foi confirmada.";
       setResult((current) =>
         current
           ? {
@@ -665,34 +657,23 @@ export default function Assistant({
         <div className="assistant-form">
           <Textarea
             id="assistant-prompt"
-            label="Pergunta"
+            label="Seu pedido"
             value={text}
             maxLength={4000}
             autosize
             minRows={2}
             maxRows={6}
             onChange={(event) => setText(event.currentTarget.value)}
-            placeholder="Descreva o produto ou peça ajuda"
+            placeholder="Ex.: adicione leite à lista, registre uma despesa ou consulte as tarefas"
           />
+          <Text size="sm" c="dimmed">
+            Peça para consultar ou alterar listas, estoque, tarefas e finanças.
+            Ações sensíveis pedem confirmação.
+          </Text>
           <div className="assistant-options">
-            <NativeSelect
-              id="assistant-mode"
-              label="Tipo de resposta"
-              value={mode}
-              onChange={(event) =>
-                setMode(
-                  event.currentTarget.value as "text" | "label" | "operator",
-                )
-              }
-              data={[
-                { value: "operator", label: "Operador da casa" },
-                { value: "label", label: "Candidatos de etiqueta" },
-                { value: "text", label: "Resposta em texto" },
-              ]}
-            />
             <FileInput
               id="assistant-image"
-              label="Foto opcional de etiqueta (máx. 5 MB)"
+              label="Foto opcional (máx. 5 MB)"
               placeholder="Escolher foto"
               accept={IMAGE_TYPES.join(",")}
               value={image}
@@ -708,7 +689,7 @@ export default function Assistant({
               loading={busy}
               leftSection={<IconSparkles size={16} aria-hidden="true" />}
             >
-              Analisar
+              Enviar pedido
             </Button>
           </Group>
         </div>
@@ -723,28 +704,37 @@ export default function Assistant({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
           >
-            <Text>{result.text}</Text>
-            {result.candidates && (
-              <dl className="candidates">
-                {Object.entries(result.candidates).map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{show(value)}</dd>
-                  </div>
-                ))}
-              </dl>
+            {result.text && <Text>{result.text}</Text>}
+            {Boolean(result.applied?.length) && (
+              <div className="assistant-applied">
+                <Text fw={700} size="sm">
+                  Alterações realizadas
+                </Text>
+                <ul>
+                  {result.applied?.map((item, index) => (
+                    <li key={`${item.tool}-${index}`}>{item.summary}</li>
+                  ))}
+                </ul>
+              </div>
             )}
-            {result.requires_confirmation ? (
-              <Text fw={700} size="sm" className="assistant-confirm">
-                {result.actions?.length
-                  ? "Confirmação pendente para as ações abaixo."
-                  : "Confirme antes de salvar. Nenhuma alteração foi feita."}
-              </Text>
-            ) : (
-              <Text size="sm" c="dimmed">
-                Nenhuma alteração foi feita.
-              </Text>
+            {Boolean(result.issues?.length) && (
+              <div className="assistant-issues">
+                <Text fw={700} size="sm">
+                  Algumas ações não foram concluídas
+                </Text>
+                <ul>
+                  {result.issues?.map((item, index) => (
+                    <li key={`${item.tool}-${index}`}>{item.message}</li>
+                  ))}
+                </ul>
+              </div>
             )}
+            {result.requires_confirmation &&
+              Boolean(result.actions?.length) && (
+                <Text fw={700} size="sm" className="assistant-confirm">
+                  Confirmação pendente para as ações abaixo.
+                </Text>
+              )}
             {result.actions?.map((proposal) => (
               <AssistantActionProposal
                 key={proposal.proposal_id}

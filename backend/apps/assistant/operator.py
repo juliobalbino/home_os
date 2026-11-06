@@ -340,6 +340,58 @@ INVITATION_SCHEMAS = {
 }
 ACCOUNT_SCHEMAS = {"propose_account_deactivation": set()}
 
+DIRECT_WRITE_SUMMARIES = {
+    "create_shopping_list": "Lista de compras criada",
+    "create_shopping_product": "Produto cadastrado",
+    "update_shopping_product": "Produto atualizado",
+    "add_shopping_product_alias": "Nome alternativo do produto adicionado",
+    "record_price_observation": "Preço registrado",
+    "add_shopping_list_item": "Item adicionado à lista de compras",
+    "update_shopping_list_item": "Item da lista atualizado",
+    "record_inventory_event": "Estoque atualizado",
+    "record_purchase": "Compra registrada",
+    "create_chore": "Tarefa criada",
+    "update_chore": "Tarefa atualizada",
+    "set_chore_occurrence_status": "Ocorrência da tarefa atualizada",
+    "create_expense": "Despesa registrada",
+    "update_expense": "Despesa atualizada",
+    "record_expense_payment": "Pagamento registrado",
+    "set_budget": "Orçamento atualizado",
+    "create_expense_category": "Categoria de despesa criada",
+}
+
+
+def is_direct_write(name):
+    return DIRECT_WRITE_SUMMARIES.get(name)
+
+
+TOOL_DESCRIPTIONS = {
+    "household_members": "Read household members, roles, and membership IDs before assigning chores or proposing access changes.",
+    "finance_categories": "Read expense categories and category IDs for this household.",
+    "finance_records": "Read expenses, payments, and budgets for this household.",
+    "shopping_products": "Read shopping products and product IDs for this household.",
+    "shopping_lists": "Read shopping lists, list items, and their IDs for this household.",
+    "inventory": "Read inventory items, quantities, and inventory item IDs for this household.",
+    "chores": "Read chores, assignments, occurrences, and their IDs for this household.",
+    "household_metadata": "Read household settings and metadata.",
+    "create_expense": "Create an expense in household finances; amounts are in minor currency units.",
+    "update_expense": "Update an existing household expense by expense ID.",
+    "record_expense_payment": "Record a payment for an existing household expense.",
+    "set_budget": "Create or update a household budget for a period.",
+    "create_expense_category": "Create a category for household expenses.",
+    "create_shopping_product": "Create a shopping product in the household catalog.",
+    "update_shopping_product": "Update an existing shopping product.",
+    "add_shopping_product_alias": "Add an alternative name to a shopping product.",
+    "record_price_observation": "Record an observed shopping product price.",
+    "add_shopping_list_item": "Add an item to an existing shopping list using its list ID.",
+    "update_shopping_list_item": "Update the status or quantity of a shopping list item.",
+    "record_inventory_event": "Adjust inventory quantity by recording an inventory event.",
+    "record_purchase": "Record a purchase and update the linked shopping and inventory data.",
+    "create_chore": "Create a household chore, optionally with assignments and recurrence.",
+    "update_chore": "Update an existing household chore.",
+    "set_chore_occurrence_status": "Mark a chore occurrence completed, skipped, or cancelled.",
+}
+
 
 def _shopping_write(name, user, household_id, arguments, request_uuid, call_index):
     from rest_framework.exceptions import ValidationError
@@ -786,7 +838,7 @@ def tool_definitions():
         {
             "type": "function",
             "name": name,
-            "description": "Read bounded data from the authenticated household.",
+            "description": TOOL_DESCRIPTIONS[name],
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -893,7 +945,7 @@ def tool_definitions():
             {
                 "type": "function",
                 "name": name,
-                "description": "Write finance data in the authenticated household.",
+                "description": TOOL_DESCRIPTIONS[name],
                 "parameters": {
                     "type": "object",
                     "properties": {k: finance_props[k] for k in keys},
@@ -962,7 +1014,7 @@ def tool_definitions():
                 "name": name,
                 "description": "Prepare an explicit-confirmation shopping-list deletion proposal."
                 if name == "propose_shopping_list_deletion"
-                else "Write shopping or inventory data in the authenticated household.",
+                else TOOL_DESCRIPTIONS[name],
                 "parameters": {
                     "type": "object",
                     "properties": {k: shopping_props[k] for k in keys},
@@ -1006,7 +1058,9 @@ def tool_definitions():
             {
                 "type": "function",
                 "name": name,
-                "description": "Create or update a chore in the authenticated household.",
+                "description": "Prepare an explicit-confirmation chore occurrence proposal."
+                if name == "propose_chore_occurrence_generation"
+                else TOOL_DESCRIPTIONS[name],
                 "parameters": {
                     "type": "object",
                     "properties": {k: chore_props[k] for k in keys},

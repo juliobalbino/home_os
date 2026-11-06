@@ -7,7 +7,7 @@ describe("Assistant", () => {
   beforeEach(() => vi.restoreAllMocks());
   afterEach(() => cleanup());
 
-  it("reports disconnected state and lets household members submit an explicit candidate request", async () => {
+  it("sends one automatic request and shows confirmed changes", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (input) => {
@@ -17,9 +17,16 @@ describe("Assistant", () => {
             url.endsWith("/assistant/status")
               ? { enabled: true, connected: true, status: "connected" }
               : {
-                  text: "Milk candidate",
-                  candidates: { name: "Milk" },
-                  requires_confirmation: true,
+                  text: "Leite adicionado à lista.",
+                  candidates: null,
+                  requires_confirmation: false,
+                  applied: [
+                    {
+                      tool: "add_shopping_list_item",
+                      summary: "Item adicionado à lista de compras",
+                    },
+                  ],
+                  actions: [],
                 },
           ),
           { status: 200 },
@@ -27,17 +34,30 @@ describe("Assistant", () => {
       });
     render(<Assistant householdId="h-1" role="member" />);
     expect(await screen.findByText(/conectado/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/pergunta/i), {
-      target: { value: "O que está nesta etiqueta?" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /analisar/i }));
     expect(
-      await screen.findByText(/confirme antes de salvar/i),
+      screen.queryByLabelText(/tipo de resposta/i),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/pedido/i), {
+      target: { value: "Adicione leite à lista" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
+    expect(
+      await screen.findByText(/item adicionado à lista de compras/i),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/nenhuma alteração foi feita/i),
+    ).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/households/h-1/assistant"),
       expect.objectContaining({ method: "POST" }),
     );
+    const assistantCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith("/households/h-1/assistant"),
+    );
+    const body = JSON.parse(String(assistantCall?.[1]?.body));
+    expect(body).toMatchObject({ text: "Adicione leite à lista" });
+    expect(body.mode).toBeUndefined();
+    expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   const proposalResponse = {
@@ -115,10 +135,10 @@ describe("Assistant", () => {
 
   async function requestProposal() {
     await screen.findByText(/conectado à sua conta chatgpt/i);
-    fireEvent.change(screen.getByLabelText(/pergunta/i), {
+    fireEvent.change(screen.getByLabelText(/pedido/i), {
       target: { value: "Excluir a lista Mercado de sábado" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /analisar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
     return screen.findByRole("button", { name: "Confirmar exclusão" });
   }
 
@@ -147,6 +167,84 @@ describe("Assistant", () => {
     expect(document.body).not.toHaveTextContent(
       /proposal-secret-123|fake-csrf-token/,
     );
+  });
+
+  it("shows a plain answer without claiming any account change", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input) =>
+        new Response(
+          JSON.stringify(
+            String(input).endsWith("/assistant/status")
+              ? { enabled: true, connected: true }
+              : {
+                  text: "Há três itens na lista.",
+                  applied: [],
+                  actions: [],
+                  requires_confirmation: false,
+                },
+          ),
+          { status: 200 },
+        ),
+    );
+    render(<Assistant householdId="h-1" role="member" />);
+    fireEvent.change(await screen.findByLabelText(/pedido/i), {
+      target: { value: "Quantos itens há na lista?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
+    expect(
+      await screen.findByText("Há três itens na lista."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/nenhuma alteração foi feita/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses generic confirmation wording for a sensitive invitation", async () => {
+    const invitation = {
+      ...proposalResponse,
+      text: "Convite preparado.",
+      actions: [
+        {
+          ...proposalResponse.actions[0],
+          kind: "create_invitation",
+          title: "Criar convite",
+          summary: "Convidar uma pessoa",
+          details: {},
+        },
+      ],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/assistant/status"))
+        return new Response(
+          JSON.stringify({ enabled: true, connected: true }),
+          { status: 200 },
+        );
+      if (url.endsWith("/auth/csrf"))
+        return new Response(JSON.stringify({ csrfToken: "fake-csrf-token" }), {
+          status: 200,
+        });
+      if (
+        url.endsWith("/assistant/actions/proposal-secret-123") &&
+        init?.method === "POST"
+      )
+        return new Response(JSON.stringify({ status: "completed" }), {
+          status: 200,
+        });
+      return new Response(JSON.stringify(invitation), { status: 200 });
+    });
+    render(<Assistant householdId="h-1" role="member" />);
+    fireEvent.change(await screen.findByLabelText(/pedido/i), {
+      target: { value: "Crie um convite" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirmar ação" }),
+    );
+    expect(
+      await screen.findByText("Ação concluída com sucesso."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/exclusão concluída/i)).not.toBeInTheDocument();
   });
 
   it("confirms a deletion proposal with CSRF and reports completion", async () => {
@@ -224,7 +322,7 @@ describe("Assistant", () => {
         screen.getByText(/a conexão com o ChatGPT ainda não foi concluída/i),
       ).toBeInTheDocument();
       expect(
-        screen.queryByRole("button", { name: /analisar/i }),
+        screen.queryByRole("button", { name: /enviar pedido/i }),
       ).not.toBeInTheDocument();
     });
   });
