@@ -34,6 +34,15 @@ type Result = {
   actions?: ActionProposal[];
   applied?: Array<{ tool: string; summary: string }>;
   issues?: Array<{ tool: string; message: string }>;
+  clarification?: Clarification;
+};
+type Clarification = {
+  id: string;
+  question: string;
+  options: Array<{ id: string; label: string }>;
+  expires_at: string;
+  original_request?: string;
+  history?: Array<{ role: "user" | "assistant"; text: string }>;
 };
 type ActionProposal = {
   proposal_id: string;
@@ -205,6 +214,10 @@ export default function Assistant({
   const [image, setImage] = useState<File | null>(null);
   const [imageData, setImageData] = useState("");
   const [result, setResult] = useState<Result | null>(null);
+  const [pending, setPending] = useState<Clarification | null>(null);
+  const [history, setHistory] = useState<
+    Array<{ role: "user" | "assistant"; text: string }>
+  >([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
@@ -219,6 +232,7 @@ export default function Assistant({
   const [copyFeedback, setCopyFeedback] = useState("");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const submitting = useRef(false);
+  const requestVersion = useRef(0);
 
   useEffect(() => {
     request<Status>("/assistant/status")
@@ -227,11 +241,42 @@ export default function Assistant({
   }, []);
 
   useEffect(() => {
+    requestVersion.current += 1;
     setResult(null);
+    setPending(null);
+    setHistory([]);
     setError("");
     setText("");
     setImage(null);
     setImageData("");
+  }, [householdId]);
+
+  useEffect(() => {
+    let active = true;
+    const version = requestVersion.current;
+    request<{ clarification: Clarification | null }>(
+      `/households/${householdId}/assistant`,
+    )
+      .then((response) => {
+        if (
+          active &&
+          version === requestVersion.current &&
+          response.clarification?.id &&
+          response.clarification.options?.length
+        ) {
+          setPending(response.clarification);
+          if (response.clarification.history?.length)
+            setHistory(response.clarification.history);
+          else if (response.clarification.original_request)
+            setHistory([
+              { role: "user", text: response.clarification.original_request },
+            ]);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [householdId]);
 
   useEffect(() => {
@@ -331,27 +376,68 @@ export default function Assistant({
     reader.readAsDataURL(file);
   }
 
-  async function submit() {
-    if (submitting.current || !text.trim()) return;
+  async function submit(answer = text, choiceId?: string) {
+    if (submitting.current || !answer.trim()) return;
+    requestVersion.current += 1;
     submitting.current = true;
     setBusy(true);
     setError("");
-    setResult(null);
+    const previousPending = pending;
+    const previousResult = result;
     try {
       const response = await send<Result>(
         `/households/${householdId}/assistant`,
         {
-          text,
-          request_id: crypto.randomUUID(),
-          ...(imageData ? { image_data: imageData } : {}),
+          text: answer,
+          request_id: previousPending?.id ?? crypto.randomUUID(),
+          ...(previousPending
+            ? {
+                clarification_id: previousPending.id,
+                ...(choiceId ? { choice_id: choiceId } : {}),
+              }
+            : imageData
+              ? { image_data: imageData }
+              : {}),
         },
       );
       setResult(response);
+      setPending(response.clarification ?? null);
+      setHistory((previous) =>
+        [
+          ...previous,
+          ...(previousResult?.text
+            ? [{ role: "assistant" as const, text: previousResult.text }]
+            : []),
+          ...(previousPending
+            ? [{ role: "assistant" as const, text: previousPending.question }]
+            : []),
+          { role: "user" as const, text: answer },
+        ].slice(-10),
+      );
+      setText("");
+      setImage(null);
+      setImageData("");
       if (response.applied?.length) onDataChanged?.("applied");
     } catch (cause) {
       setError(reason(cause, "Não foi possível concluir o pedido."));
     } finally {
       submitting.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function startNewRequest() {
+    requestVersion.current += 1;
+    setBusy(true);
+    try {
+      await send(`/households/${householdId}/assistant`, {}, "DELETE");
+      setPending(null);
+      setResult(null);
+      setText("");
+      setHistory([]);
+    } catch (cause) {
+      setError(reason(cause, "Não foi possível limpar a pergunta pendente."));
+    } finally {
       setBusy(false);
     }
   }
@@ -665,9 +751,54 @@ export default function Assistant({
       )}
       {connected && role !== "viewer" && open && (
         <div className="assistant-form">
+          {history.length > 0 && (
+            <ol aria-label="Histórico do pedido" className="assistant-history">
+              {history.map((turn, index) => (
+                <li key={index}>
+                  <Text size="sm">
+                    <strong>
+                      {turn.role === "user" ? "Você" : "Assistente"}:
+                    </strong>{" "}
+                    {turn.text}
+                  </Text>
+                </li>
+              ))}
+            </ol>
+          )}
+          {pending && (
+            <Card
+              withBorder
+              role="group"
+              aria-label="Pergunta do assistente"
+              padding="md"
+              mb="md"
+            >
+              <Text fw={700}>{pending.question}</Text>
+              <Group mt="sm">
+                {pending.options.map((option) => (
+                  <Button
+                    key={option.id}
+                    variant="light"
+                    disabled={busy}
+                    onClick={() => void submit(option.label, option.id)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </Group>
+              <Button
+                mt="sm"
+                variant="subtle"
+                disabled={busy}
+                onClick={() => void startNewRequest()}
+              >
+                Novo pedido
+              </Button>
+            </Card>
+          )}
           <Textarea
             id="assistant-prompt"
-            label="Seu pedido"
+            label={pending ? "Sua resposta" : "Seu pedido"}
             value={text}
             maxLength={4000}
             autosize
@@ -685,25 +816,31 @@ export default function Assistant({
                 void submit();
               }
             }}
-            placeholder="Ex.: adicione leite à lista, registre uma despesa ou consulte as tarefas"
+            placeholder={
+              pending
+                ? "Digite outra resposta ou escolha uma alternativa acima"
+                : "Ex.: adicione leite à lista, registre uma despesa ou consulte as tarefas"
+            }
           />
           <Text size="sm" c="dimmed">
-            Peça para consultar ou alterar listas, estoque, tarefas e finanças.
-            Ações sensíveis pedem confirmação. Enter envia; Shift+Enter cria uma
-            nova linha.
+            {pending
+              ? "Escolha uma alternativa ou digite sua resposta. Enter envia."
+              : "Peça para consultar ou alterar listas, estoque, tarefas e finanças. Ações sensíveis pedem confirmação. Enter envia; Shift+Enter cria uma nova linha."}
           </Text>
-          <div className="assistant-options">
-            <FileInput
-              id="assistant-image"
-              label="Foto opcional (máx. 5 MB)"
-              placeholder="Escolher foto"
-              accept={IMAGE_TYPES.join(",")}
-              value={image}
-              onChange={pick}
-              clearable
-              leftSection={<IconPhoto size={16} aria-hidden="true" />}
-            />
-          </div>
+          {!pending && (
+            <div className="assistant-options">
+              <FileInput
+                id="assistant-image"
+                label="Foto opcional (máx. 5 MB)"
+                placeholder="Escolher foto"
+                accept={IMAGE_TYPES.join(",")}
+                value={image}
+                onChange={pick}
+                clearable
+                leftSection={<IconPhoto size={16} aria-hidden="true" />}
+              />
+            </div>
+          )}
           <Group>
             <Button
               onClick={() => void submit()}
@@ -711,7 +848,7 @@ export default function Assistant({
               loading={busy}
               leftSection={<IconSparkles size={16} aria-hidden="true" />}
             >
-              Enviar pedido
+              {pending ? "Enviar resposta" : "Enviar pedido"}
             </Button>
           </Group>
         </div>

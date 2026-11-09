@@ -67,6 +67,99 @@ class OperatorReadTests(TestCase):
         self.assertIn("expense", definitions["create_expense"].lower())
         self.assertIn("inventory", definitions["record_inventory_event"].lower())
         self.assertIn("chore", definitions["create_chore"].lower())
+        self.assertIn("necessary", definitions["ask_clarification"].lower())
+
+    def test_operator_returns_clickable_choices_without_writing(self):
+        from unittest.mock import patch
+        from apps.assistant.services import _operator_completion
+
+        output = [
+            {
+                "type": "function_call",
+                "call_id": "clarify-1",
+                "name": "ask_clarification",
+                "arguments": json.dumps(
+                    {
+                        "question": "Qual lista devo usar?",
+                        "options": ["Mercado", "Farmácia"],
+                    }
+                ),
+            }
+        ]
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen",
+            return_value=completed_stream(output),
+        ):
+            result = _operator_completion(
+                model="mock-model",
+                token="synthetic-token",
+                text="Adicione leite à lista",
+                user=self.owner,
+                household_id=self.household.id,
+                request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            )
+        self.assertEqual(
+            result["clarification"],
+            {
+                "question": "Qual lista devo usar?",
+                "options": [
+                    {"id": "1", "label": "Mercado"},
+                    {"id": "2", "label": "Farmácia"},
+                ],
+            },
+        )
+        self.assertEqual(result["applied"], [])
+        self.assertFalse(ShoppingList.objects.exists())
+
+    def test_plain_question_is_retried_as_clickable_choices(self):
+        from unittest.mock import patch
+        from apps.assistant.services import _operator_completion
+
+        outputs = [
+            [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "Qual lista devo usar?"}
+                    ],
+                }
+            ],
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "clarify-2",
+                    "name": "ask_clarification",
+                    "arguments": json.dumps(
+                        {
+                            "question": "Qual lista devo usar?",
+                            "options": ["Mercado", "Farmácia"],
+                        }
+                    ),
+                }
+            ],
+        ]
+        requests = []
+
+        def mocked_urlopen(request, timeout=None):
+            requests.append(json.loads(request.data))
+            return completed_stream(outputs.pop(0))
+
+        with patch(
+            "apps.assistant.services.urllib.request.urlopen", side_effect=mocked_urlopen
+        ):
+            result = _operator_completion(
+                model="mock-model",
+                token="synthetic-token",
+                text="Adicione leite à lista",
+                user=self.owner,
+                household_id=self.household.id,
+                request_uuid="7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+            )
+        self.assertEqual(result["clarification"]["question"], "Qual lista devo usar?")
+        self.assertEqual(
+            requests[1]["tool_choice"],
+            {"type": "function", "name": "ask_clarification"},
+        )
 
     def test_tool_arguments_are_strict(self):
         with self.assertRaises(ValueError):

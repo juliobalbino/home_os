@@ -2,6 +2,7 @@ import json
 import hashlib
 import re
 import time
+from datetime import timedelta
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -10,9 +11,14 @@ from urllib.request import Request
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.assistant.models import AssistantPairing, ChatGPTConnection
+from apps.assistant.models import (
+    AssistantClarification,
+    AssistantPairing,
+    ChatGPTConnection,
+)
 from apps.households.models import Household, Membership
 
 
@@ -58,6 +64,140 @@ class AssistantApiTests(TestCase):
             str(create_response.call_args.kwargs["request_uuid"]),
             "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
         )
+
+    @override_settings(
+        ASSISTANT_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+    @patch("apps.assistant.services._operator_completion")
+    @patch("apps.assistant.services._available_model", return_value="test-model")
+    @patch("apps.assistant.services.get_connection")
+    def test_clarification_choice_resumes_original_request(
+        self, connection, model, complete
+    ):
+        connection.return_value = (
+            MagicMock(status="connected"),
+            {"access_token": "test-token"},
+        )
+        complete.side_effect = [
+            {
+                "text": "",
+                "actions": [],
+                "applied": [],
+                "issues": [],
+                "clarification": {
+                    "question": "Qual lista devo usar?",
+                    "options": [
+                        {"id": "1", "label": "Mercado"},
+                        {"id": "2", "label": "Farmácia"},
+                    ],
+                },
+            },
+            {
+                "text": "Leite adicionado.",
+                "actions": [],
+                "applied": [
+                    {"tool": "add_shopping_list_item", "summary": "Item adicionado"}
+                ],
+                "issues": [],
+            },
+        ]
+        self.client.force_authenticate(self.owner)
+        endpoint = f"/api/v1/households/{self.house.pk}/assistant"
+        original = "Adicione leite à lista"
+        first = self.client.post(
+            endpoint,
+            {"text": original, "request_id": "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 200)
+        pending = AssistantClarification.objects.get(
+            pk=first.data["clarification"]["id"]
+        )
+        self.assertNotIn(original, pending.context_ciphertext)
+        self.assertEqual(
+            self.client.get(endpoint).data["clarification"]["id"], str(pending.id)
+        )
+        payload = {
+            "text": "Mercado",
+            "choice_id": "1",
+            "clarification_id": str(pending.id),
+            "request_id": str(pending.id),
+        }
+        second = self.client.post(endpoint, payload, format="json")
+        self.assertEqual(second.status_code, 200)
+        self.assertIn(original, complete.call_args.kwargs["text"])
+        self.assertIn("Resposta: Mercado", complete.call_args.kwargs["text"])
+        self.assertEqual(second.data["applied"][0]["tool"], "add_shopping_list_item")
+        self.assertIsNone(self.client.get(endpoint).data["clarification"])
+        replay = self.client.post(endpoint, payload, format="json")
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(complete.call_count, 2)
+
+    @override_settings(
+        ASSISTANT_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+    def test_clarification_is_scoped_and_choice_must_match(self):
+        pending = AssistantClarification(
+            user=self.owner,
+            household=self.house,
+            question="Qual lista?",
+            options=[{"id": "1", "label": "Mercado"}],
+            expires_at=timezone.now() + timedelta(minutes=30),
+        )
+        pending.set_context(
+            {"text": "Adicione leite", "image_data": None, "answers": []}
+        )
+        pending.save()
+        endpoint = f"/api/v1/households/{self.house.pk}/assistant"
+        self.client.force_authenticate(self.viewer)
+        self.assertEqual(self.client.get(endpoint).status_code, 403)
+        other = get_user_model().objects.create_user(
+            email="other@example.test", name="Other", password="abcdef"
+        )
+        Membership.objects.create(user=other, household=self.house, role="member")
+        self.client.force_authenticate(other)
+        self.assertIsNone(self.client.get(endpoint).data["clarification"])
+        self.assertEqual(
+            self.client.post(
+                endpoint,
+                {
+                    "text": "Mercado",
+                    "choice_id": "1",
+                    "clarification_id": str(pending.id),
+                    "request_id": str(pending.id),
+                },
+                format="json",
+            ).status_code,
+            404,
+        )
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            endpoint,
+            {
+                "text": "Mercado",
+                "choice_id": "9",
+                "clarification_id": str(pending.id),
+                "request_id": str(pending.id),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        pending.refresh_from_db()
+        self.assertEqual(pending.answer, "")
+        pending.expires_at = timezone.now() - timedelta(seconds=1)
+        pending.save(update_fields=["expires_at"])
+        response = self.client.post(
+            endpoint,
+            {
+                "text": "Mercado",
+                "choice_id": "1",
+                "clarification_id": str(pending.id),
+                "request_id": str(pending.id),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNone(self.client.get(endpoint).data["clarification"])
 
     def _claimed_pairing(self):
         self.client.force_authenticate(self.owner)

@@ -61,14 +61,135 @@ describe("Assistant", () => {
       expect.stringContaining("/households/h-1/assistant"),
       expect.objectContaining({ method: "POST" }),
     );
-    const assistantCall = fetchMock.mock.calls.find(([input]) =>
-      String(input).endsWith("/households/h-1/assistant"),
+    const assistantCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/households/h-1/assistant") &&
+        init?.method === "POST",
     );
     const body = JSON.parse(String(assistantCall?.[1]?.body));
     expect(body).toMatchObject({ text: "Adicione leite à lista" });
     expect(body.mode).toBeUndefined();
     expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(onDataChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers clickable clarification and resumes the same request", async () => {
+    const onDataChanged = vi.fn();
+    const pending = {
+      id: "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+      question: "Qual lista devo usar?",
+      options: [
+        { id: "1", label: "Mercado" },
+        { id: "2", label: "Farmácia" },
+      ],
+      expires_at: "2030-01-01T00:00:00Z",
+    };
+    const posts: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/assistant/status"))
+        return new Response(JSON.stringify({ enabled: true, connected: true }));
+      if (url.endsWith("/auth/csrf"))
+        return new Response(JSON.stringify({ csrfToken: "test" }));
+      if (url.endsWith("/assistant") && init?.method !== "POST")
+        return new Response(JSON.stringify({ clarification: null }));
+      if (url.endsWith("/assistant") && init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)));
+        return new Response(
+          JSON.stringify(
+            posts.length === 1
+              ? {
+                  text: "",
+                  applied: [],
+                  actions: [],
+                  clarification: pending,
+                  requires_confirmation: false,
+                }
+              : {
+                  text: "Leite adicionado.",
+                  applied: [
+                    {
+                      tool: "add_shopping_list_item",
+                      summary: "Item adicionado",
+                    },
+                  ],
+                  actions: [],
+                  requires_confirmation: false,
+                },
+          ),
+        );
+      }
+      throw new Error(url);
+    });
+    render(
+      <Assistant
+        householdId="h-1"
+        role="member"
+        onDataChanged={onDataChanged}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText(/pedido/i), {
+      target: { value: "Adicione leite à lista" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
+    expect(
+      await screen.findByText("Qual lista devo usar?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Mercado" }));
+    expect(await screen.findByText("Leite adicionado.")).toBeInTheDocument();
+    expect(posts[1]).toMatchObject({
+      text: "Mercado",
+      choice_id: "1",
+      clarification_id: pending.id,
+    });
+    expect(onDataChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores a pending question after returning to the page", async () => {
+    const pending = {
+      id: "7c8e4f4a-fb6d-4c31-86cc-0d57e976d2a1",
+      question: "Qual lista devo usar?",
+      options: [
+        { id: "1", label: "Mercado" },
+        { id: "2", label: "Farmácia" },
+      ],
+      original_request: "Adicione leite à lista",
+      expires_at: "2030-01-01T00:00:00Z",
+    };
+    const posts: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/assistant/status"))
+        return new Response(JSON.stringify({ enabled: true, connected: true }));
+      if (url.endsWith("/auth/csrf"))
+        return new Response(JSON.stringify({ csrfToken: "test" }));
+      if (url.endsWith("/assistant") && init?.method !== "POST")
+        return new Response(JSON.stringify({ clarification: pending }));
+      if (url.endsWith("/assistant") && init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)));
+        return new Response(
+          JSON.stringify({
+            text: "Feito.",
+            applied: [],
+            actions: [],
+            requires_confirmation: false,
+          }),
+        );
+      }
+      throw new Error(url);
+    });
+    render(<Assistant householdId="h-1" role="member" />);
+    expect(
+      await screen.findByText("Qual lista devo usar?"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Adicione leite à lista/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Mercado" }));
+    await screen.findByText("Feito.");
+    expect(posts[0]).toMatchObject({
+      clarification_id: pending.id,
+      choice_id: "1",
+      text: "Mercado",
+    });
   });
 
   it("keeps Shift+Enter for a new line and ignores Enter during composition", async () => {
@@ -100,8 +221,10 @@ describe("Assistant", () => {
       isComposing: true,
     });
     expect(
-      fetchMock.mock.calls.filter(([input]) =>
-        String(input).endsWith("/households/h-1/assistant"),
+      fetchMock.mock.calls.filter(
+        ([input, init]) =>
+          String(input).endsWith("/households/h-1/assistant") &&
+          init?.method === "POST",
       ),
     ).toHaveLength(0);
     expect(prompt).toHaveValue("Primeira linha\nSegunda linha");

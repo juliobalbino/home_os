@@ -137,3 +137,27 @@ class AssistantActionProposal(models.Model):
     expires_at = models.DateTimeField()
     completed_at = models.DateTimeField(null=True, blank=True)
     result = models.JSONField(default=dict)
+
+
+class AssistantClarification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    household = models.ForeignKey("households.Household", on_delete=models.CASCADE)
+    context_ciphertext = models.TextField()
+    question = models.CharField(max_length=500)
+    options = models.JSONField(default=list)
+    answer = models.CharField(max_length=4000, blank=True)
+    processing = models.BooleanField(default=False)
+    response = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+
+    def set_context(self, context):
+        self.context_ciphertext = (
+            credential_cipher()
+            .encrypt(json.dumps(context, ensure_ascii=False).encode())
+            .decode()
+        )
+
+    def get_context(self):
+        return json.loads(credential_cipher().decrypt(self.context_ciphertext.encode()))

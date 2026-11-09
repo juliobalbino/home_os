@@ -17,6 +17,7 @@ from apps.assistant.configuration import (
     assistant_is_ready,
 )
 from apps.assistant.models import (
+    AssistantClarification,
     AssistantHostIdentity,
     AssistantPairing,
     ChatGPTConnection,
@@ -388,8 +389,51 @@ class AssistantDisconnectView(APIView):
         return Response(disconnect_user(request.user))
 
 
-class AssistantRequestView(APIView):
+class AssistantRequestView(NoStoreAPIView):
     permission_classes = [IsAuthenticated]
+
+    def get(self, request, household_id):
+        require_membership(request.user, household_id, write=True)
+        pending = (
+            AssistantClarification.objects.filter(
+                user=request.user,
+                household_id=household_id,
+                answer="",
+                expires_at__gt=timezone.now(),
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if pending is None:
+            return Response({"clarification": None})
+        context = pending.get_context()
+        history = [{"role": "user", "text": context["text"]}]
+        for answer in context["answers"]:
+            history.extend(
+                [
+                    {"role": "assistant", "text": answer["question"]},
+                    {"role": "user", "text": answer["answer"]},
+                ]
+            )
+        return Response(
+            {
+                "clarification": {
+                    "id": str(pending.id),
+                    "question": pending.question,
+                    "options": pending.options,
+                    "expires_at": pending.expires_at,
+                    "original_request": context["text"],
+                    "history": history,
+                }
+            }
+        )
+
+    def delete(self, request, household_id):
+        require_membership(request.user, household_id, write=True)
+        AssistantClarification.objects.filter(
+            user=request.user, household_id=household_id, answer=""
+        ).delete()
+        return Response({"cleared": True})
 
     def post(self, request, household_id):
         mode = request.data.get("mode", "operator")
@@ -407,6 +451,21 @@ class AssistantRequestView(APIView):
                 from rest_framework.exceptions import ValidationError
 
                 raise ValidationError({"request_id": "A valid UUID is required."})
+        clarification_id = request.data.get("clarification_id")
+        if clarification_id is not None:
+            try:
+                clarification_id = uuid.UUID(str(clarification_id))
+            except (ValueError, TypeError, AttributeError):
+                from rest_framework.exceptions import ValidationError
+
+                raise ValidationError({"clarification_id": "A valid UUID is required."})
+        choice_id = request.data.get("choice_id")
+        if choice_id is not None and (
+            not isinstance(choice_id, str) or not choice_id.isdigit()
+        ):
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"choice_id": "Invalid choice."})
         result = create_response(
             request.user,
             request.data.get("text"),
@@ -414,6 +473,8 @@ class AssistantRequestView(APIView):
             household_id,
             mode,
             request_uuid=request_uuid,
+            clarification_id=clarification_id,
+            choice_id=choice_id,
         )
         return Response(result)
 

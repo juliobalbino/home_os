@@ -851,6 +851,31 @@ def tool_definitions():
     definitions.append(
         {
             "type": "function",
+            "name": "ask_clarification",
+            "description": (
+                "Ask a question only when a necessary decision cannot be inferred from the request "
+                "or household data. For clear tasks, execute immediately. Give 2 to 4 short "
+                "clickable alternatives; do not ask optional or confirmation questions here."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 4,
+                    },
+                },
+                "required": ["question", "options"],
+                "additionalProperties": False,
+            },
+        }
+    )
+    definitions.append(
+        {
+            "type": "function",
             "name": "propose_household_archive",
             "description": "Prepare an explicit-confirmation household archive proposal.",
             "parameters": {
