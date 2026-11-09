@@ -36,6 +36,85 @@ function signedIn(
 }
 
 describe("authenticated account interface", () => {
+  it("refreshes the visible dashboard after an assistant update", async () => {
+    let items: Array<{
+      id: number;
+      name: string;
+      quantity: string;
+      unit: string;
+      status: string;
+    }> = [];
+    let shoppingLoads = 0;
+    signedIn(
+      [
+        {
+          id: "one",
+          name: "Casa Azul",
+          role: "owner",
+          timezone: "America/Sao_Paulo",
+        },
+      ],
+      (url, init) => {
+        if (url.endsWith("/auth/csrf"))
+          return new Response(JSON.stringify({ csrfToken: "csrf" }));
+        if (url.endsWith("/assistant/status"))
+          return new Response(
+            JSON.stringify({ enabled: true, connected: true }),
+          );
+        if (url.endsWith("/assistant") && init?.method === "POST") {
+          items = [
+            {
+              id: 11,
+              name: "Leite",
+              quantity: "1",
+              unit: "un",
+              status: "needed",
+            },
+          ];
+          return new Response(
+            JSON.stringify({
+              text: "Pedido concluído.",
+              applied: [
+                { tool: "add_shopping_list_item", summary: "Item adicionado" },
+              ],
+              actions: [],
+              requires_confirmation: false,
+            }),
+          );
+        }
+        if (url.endsWith("/shopping-lists")) {
+          shoppingLoads += 1;
+          return new Response(
+            JSON.stringify([
+              { id: 4, name: "Mercado", status: "active", items },
+            ]),
+          );
+        }
+        if (url.includes("financial-summary"))
+          return new Response(
+            JSON.stringify({ spent_total: 0, budget_total: 0 }),
+          );
+        if (url.endsWith("/settlements") || url.endsWith("/chore-occurrences"))
+          return new Response(JSON.stringify([]));
+        return undefined;
+      },
+    );
+    window.location.hash = "#/painel";
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Abrir assistente" }),
+    );
+    fireEvent.change(screen.getByLabelText("Seu pedido"), {
+      target: { value: "Adicione leite" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Seu pedido"), {
+      key: "Enter",
+      code: "Enter",
+    });
+    expect(await screen.findByText("Leite")).toBeInTheDocument();
+    expect(shoppingLoads).toBeGreaterThanOrEqual(2);
+  });
+
   it("uses the household timezone for the dashboard date, period, and chore time", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-01T02:30:00.000Z"));

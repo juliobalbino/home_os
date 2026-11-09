@@ -50,6 +50,33 @@ function mockApi() {
 }
 
 describe("dashboard one-tap actions", () => {
+  it("shows a grocery item again when refreshed data makes it pending", async () => {
+    mockApi();
+    const view = render(
+      <Dashboard
+        householdId="home-1"
+        householdName="Casa"
+        role="member"
+        refreshKey={0}
+      />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Marcar Leite como comprado" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Leite")).not.toBeInTheDocument(),
+    );
+    view.rerender(
+      <Dashboard
+        householdId="home-1"
+        householdName="Casa"
+        role="member"
+        refreshKey={1}
+      />,
+    );
+    expect(await screen.findByText("Leite")).toBeInTheDocument();
+  });
+
   it("lets a member finish a chore and tick a grocery item from the first screen", async () => {
     const fetchMock = mockApi();
     render(

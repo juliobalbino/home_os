@@ -111,18 +111,23 @@ export default function Dashboard({
   role,
   timezone = DEFAULT_TIME_ZONE,
   children,
+  refreshKey = 0,
 }: {
   householdId: string;
   householdName: string;
   role?: string;
   timezone?: string;
   children?: ReactNode;
+  refreshKey?: number;
 }) {
   const now = new Date();
   const writable = Boolean(role) && role !== "viewer";
   const toast = useToast();
   const [handled, setHandled] = useState<Set<string>>(new Set());
   const [actionError, setActionError] = useState("");
+  useEffect(() => {
+    setHandled(new Set());
+  }, [householdId, refreshKey]);
   async function act(key: string, call: () => Promise<unknown>, done: string) {
     setActionError("");
     try {
@@ -146,7 +151,7 @@ export default function Dashboard({
       budget: summary?.budget_total ?? 0,
       balances: list<Balance>(balances),
     };
-  }, `${householdId}|${period}`);
+  }, `${householdId}|${period}|${refreshKey}`);
   const shopping = useSection(async () => {
     const lists = list<ShoppingList>(
       await request<ShoppingList[]>(
@@ -160,13 +165,13 @@ export default function Dashboard({
           .filter((item) => item.status === "needed")
           .map((item) => ({ ...item, listName: entry.name })),
       );
-  }, householdId);
+  }, `${householdId}|${refreshKey}`);
   const chores = useSection(
     async () =>
       list<Occurrence>(
         await request(`/households/${householdId}/chore-occurrences`),
       ),
-    householdId,
+    `${householdId}|${refreshKey}`,
   );
   const toBuy = (shopping.data ?? []).filter(
     (item) => !handled.has(`s${item.id}`),

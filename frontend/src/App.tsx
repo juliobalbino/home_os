@@ -24,6 +24,7 @@ export default function App() {
   const [session, setSession] = useState<Session>({ state: "loading" });
   const [selectedHouseId, setSelectedHouseId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [dataVersion, setDataVersion] = useState(0);
   const route = useRoute();
 
   const refresh = useCallback(async () => {
@@ -119,8 +120,17 @@ export default function App() {
               householdName={house.name}
               role={role}
               timezone={timezone}
+              refreshKey={dataVersion}
             >
-              <Assistant householdId={house.id} role={role} compact />
+              <Assistant
+                householdId={house.id}
+                role={role}
+                compact
+                onDataChanged={(change) => {
+                  setDataVersion((current) => current + 1);
+                  if (change === "confirmed") void refresh();
+                }}
+              />
             </Dashboard>
           )}
           {route === "financas" && (

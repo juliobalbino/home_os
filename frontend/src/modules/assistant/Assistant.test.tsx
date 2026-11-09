@@ -8,6 +8,7 @@ describe("Assistant", () => {
   afterEach(() => cleanup());
 
   it("sends one automatic request and shows confirmed changes", async () => {
+    const onDataChanged = vi.fn();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (input) => {
@@ -32,7 +33,13 @@ describe("Assistant", () => {
           { status: 200 },
         );
       });
-    render(<Assistant householdId="h-1" role="member" />);
+    render(
+      <Assistant
+        householdId="h-1"
+        role="member"
+        onDataChanged={onDataChanged}
+      />,
+    );
     expect(await screen.findByText(/conectado/i)).toBeInTheDocument();
     expect(
       screen.queryByLabelText(/tipo de resposta/i),
@@ -40,7 +47,10 @@ describe("Assistant", () => {
     fireEvent.change(screen.getByLabelText(/pedido/i), {
       target: { value: "Adicione leite à lista" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
+    fireEvent.keyDown(screen.getByLabelText(/pedido/i), {
+      key: "Enter",
+      code: "Enter",
+    });
     expect(
       await screen.findByText(/item adicionado à lista de compras/i),
     ).toBeInTheDocument();
@@ -58,6 +68,43 @@ describe("Assistant", () => {
     expect(body).toMatchObject({ text: "Adicione leite à lista" });
     expect(body.mode).toBeUndefined();
     expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(onDataChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Shift+Enter for a new line and ignores Enter during composition", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input) =>
+        new Response(
+          JSON.stringify(
+            String(input).endsWith("/assistant/status")
+              ? { enabled: true, connected: true }
+              : {
+                  text: "Resposta",
+                  applied: [],
+                  actions: [],
+                  requires_confirmation: false,
+                },
+          ),
+          { status: 200 },
+        ),
+    );
+    render(<Assistant householdId="h-1" role="member" />);
+    const prompt = await screen.findByLabelText(/pedido/i);
+    fireEvent.change(prompt, {
+      target: { value: "Primeira linha\nSegunda linha" },
+    });
+    fireEvent.keyDown(prompt, { key: "Enter", code: "Enter", shiftKey: true });
+    fireEvent.keyDown(prompt, {
+      key: "Enter",
+      code: "Enter",
+      isComposing: true,
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith("/households/h-1/assistant"),
+      ),
+    ).toHaveLength(0);
+    expect(prompt).toHaveValue("Primeira linha\nSegunda linha");
   });
 
   const proposalResponse = {
@@ -170,6 +217,7 @@ describe("Assistant", () => {
   });
 
   it("shows a plain answer without claiming any account change", async () => {
+    const onDataChanged = vi.fn();
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async (input) =>
         new Response(
@@ -186,7 +234,13 @@ describe("Assistant", () => {
           { status: 200 },
         ),
     );
-    render(<Assistant householdId="h-1" role="member" />);
+    render(
+      <Assistant
+        householdId="h-1"
+        role="member"
+        onDataChanged={onDataChanged}
+      />,
+    );
     fireEvent.change(await screen.findByLabelText(/pedido/i), {
       target: { value: "Quantos itens há na lista?" },
     });
@@ -197,6 +251,7 @@ describe("Assistant", () => {
     expect(
       screen.queryByText(/nenhuma alteração foi feita/i),
     ).not.toBeInTheDocument();
+    expect(onDataChanged).not.toHaveBeenCalled();
   });
 
   it("uses generic confirmation wording for a sensitive invitation", async () => {
@@ -249,8 +304,16 @@ describe("Assistant", () => {
 
   it("confirms a deletion proposal with CSRF and reports completion", async () => {
     const fetchMock = mockProposalFetch();
-    render(<Assistant householdId="h-1" role="member" />);
+    const onDataChanged = vi.fn();
+    render(
+      <Assistant
+        householdId="h-1"
+        role="member"
+        onDataChanged={onDataChanged}
+      />,
+    );
     await requestProposal();
+    expect(onDataChanged).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Confirmar exclusão" }));
 
     expect(
@@ -269,6 +332,7 @@ describe("Assistant", () => {
     expect(JSON.parse(String(actionCall?.[1]?.body))).toEqual({
       confirm: true,
     });
+    expect(onDataChanged).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a deletion proposal without confirming it", async () => {

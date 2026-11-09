@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Anchor,
   Badge,
@@ -191,11 +191,13 @@ export default function Assistant({
   householdId,
   role,
   compact = false,
+  onDataChanged,
 }: {
   householdId: string;
   role: string;
   /** Starts folded to one row so it does not crowd the first screen. */
   compact?: boolean;
+  onDataChanged?: (change: "applied" | "confirmed") => void;
 }) {
   const [open, setOpen] = useState(!compact);
   const [status, setStatus] = useState<Status | null>(null);
@@ -216,6 +218,7 @@ export default function Assistant({
   const [pairingBusy, setPairingBusy] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState("");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const submitting = useRef(false);
 
   useEffect(() => {
     request<Status>("/assistant/status")
@@ -329,20 +332,26 @@ export default function Assistant({
   }
 
   async function submit() {
+    if (submitting.current || !text.trim()) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     setResult(null);
     try {
-      setResult(
-        await send<Result>(`/households/${householdId}/assistant`, {
+      const response = await send<Result>(
+        `/households/${householdId}/assistant`,
+        {
           text,
           request_id: crypto.randomUUID(),
           ...(imageData ? { image_data: imageData } : {}),
-        }),
+        },
       );
+      setResult(response);
+      if (response.applied?.length) onDataChanged?.("applied");
     } catch (cause) {
       setError(reason(cause, "Não foi possível concluir o pedido."));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -354,6 +363,7 @@ export default function Assistant({
         `/households/${householdId}/assistant/actions/${encodeURIComponent(proposal.proposal_id)}`,
         { confirm },
       );
+      if (confirm) onDataChanged?.("confirmed");
       setResult((current) =>
         current
           ? {
@@ -664,11 +674,23 @@ export default function Assistant({
             minRows={2}
             maxRows={6}
             onChange={(event) => setText(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.repeat &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
+                void submit();
+              }
+            }}
             placeholder="Ex.: adicione leite à lista, registre uma despesa ou consulte as tarefas"
           />
           <Text size="sm" c="dimmed">
             Peça para consultar ou alterar listas, estoque, tarefas e finanças.
-            Ações sensíveis pedem confirmação.
+            Ações sensíveis pedem confirmação. Enter envia; Shift+Enter cria uma
+            nova linha.
           </Text>
           <div className="assistant-options">
             <FileInput
@@ -685,7 +707,7 @@ export default function Assistant({
           <Group>
             <Button
               onClick={() => void submit()}
-              disabled={!text.trim()}
+              disabled={busy || !text.trim()}
               loading={busy}
               leftSection={<IconSparkles size={16} aria-hidden="true" />}
             >
