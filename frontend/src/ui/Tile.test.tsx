@@ -2,9 +2,19 @@ import { render } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { TileMark } from "./Tile";
 
-it("keeps tile marks matte while retaining clipping and motif palette", () => {
-  const { container } = render(<TileMark motif="estrela" />);
-  expect(container.querySelector("linearGradient")).toBeNull();
-  expect(container.querySelector("clipPath")).not.toBeNull();
-  expect(container.querySelector("path[fill='var(--m-a)']")).not.toBeNull();
-});
+it.each([
+  ["arcos", "layout-grid"],
+  ["losango", "wallet"],
+  ["flor", "shopping-cart"],
+  ["catavento", "checklist"],
+  ["estrela", "home-2"],
+  ["olho", "sparkles"],
+] as const)(
+  "uses a simple %s area icon without tile artwork",
+  (motif, icon) => {
+    const { container } = render(<TileMark motif={motif} />);
+    expect(container.querySelector(`svg.tabler-icon-${icon}`)).not.toBeNull();
+    expect(container.querySelector("clipPath, pattern, ellipse")).toBeNull();
+    expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true");
+  },
+);

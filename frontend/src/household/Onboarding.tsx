@@ -4,7 +4,7 @@ import { Button, Group, Text, TextInput, Title } from "@mantine/core";
 import { IconDoorEnter, IconHomePlus } from "@tabler/icons-react";
 import { reason, send } from "../lib/api";
 import type { Household, User } from "../lib/api";
-import { TileMark, TileRun } from "../ui/Tile";
+import { TileMark } from "../ui/Tile";
 import { ErrorNote } from "../ui/parts";
 
 /** First run: no household yet. Create one or join with an invitation. */
@@ -82,7 +82,6 @@ export function Onboarding({
         )}
         <div className="tile-wall onboarding-wall">
           <form className="tile onboarding-tile" onSubmit={create}>
-            <TileRun motifs={["estrela"]} size={14} className="barrado" />
             <IconHomePlus
               size={28}
               stroke={1.6}
@@ -111,7 +110,6 @@ export function Onboarding({
             </Button>
           </form>
           <form className="tile onboarding-tile" onSubmit={accept}>
-            <TileRun motifs={["arcos"]} size={14} className="barrado" />
             <IconDoorEnter
               size={28}
               stroke={1.6}

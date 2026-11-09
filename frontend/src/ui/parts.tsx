@@ -9,10 +9,10 @@ import {
 import type { ReactNode } from "react";
 import { motion } from "motion/react";
 import { IconAlertTriangle, IconCheck } from "@tabler/icons-react";
-import { TileMark, TileRun } from "./Tile";
+import { TileMark } from "./Tile";
 import type { Motif } from "./Tile";
 
-/** Page title set on a glazed tile, with a band of the area's tiles beneath. */
+/** Page title with its area icon. */
 export function PageHeader({
   motif,
   title,
@@ -38,7 +38,6 @@ export function PageHeader({
         </div>
         {aside && <div className="page-header-aside">{aside}</div>}
       </div>
-      <TileRun motifs={[motif]} size={14} className="barrado" />
     </header>
   );
 }

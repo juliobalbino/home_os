@@ -5,7 +5,7 @@ import { href } from "../lib/route";
 import type { Route } from "../lib/route";
 import type { Household, User } from "../lib/api";
 import { NavIcon } from "../ui/NavIcon";
-import { TileMark, TileRun } from "../ui/Tile";
+import { TileMark } from "../ui/Tile";
 
 const items: { route: Route; label: string }[] = [
   { route: "painel", label: "Painel" },
@@ -101,11 +101,6 @@ export function AppFrame({
             );
           })}
         </ul>
-        <TileRun
-          motifs={["arcos", "estrela"]}
-          size={28}
-          className="nav-tiles"
-        />
         <div className="frame-user">
           <Text size="sm" fw={600} truncate>
             {user.name}

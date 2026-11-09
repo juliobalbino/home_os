@@ -11,7 +11,7 @@ import {
 } from "@mantine/core";
 import { AnimatePresence, motion } from "motion/react";
 import { reason, send } from "../lib/api";
-import { TileMark, TileRun } from "../ui/Tile";
+import { TileMark } from "../ui/Tile";
 import { ErrorNote } from "../ui/parts";
 
 export function AuthScreen({
@@ -48,11 +48,6 @@ export function AuthScreen({
   return (
     <main className="auth">
       <div className="auth-wall">
-        <TileRun
-          motifs={["arcos", "flor"]}
-          size={64}
-          className="auth-wall-tiles"
-        />
         <div className="auth-brand">
           <TileMark motif="estrela" size={44} />
           <span>Home OS</span>

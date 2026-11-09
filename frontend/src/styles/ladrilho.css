@@ -19,18 +19,11 @@
   --hos-glaze-deep: #0c3a2e;
   --hos-glaze-soft: #dcebe3;
   --hos-glaze-ink: #0f4f3f;
-  --hos-tile-pale: #c9dcd2;
   --hos-ocre: #c8952b;
   --hos-ocre-ink: #7f5c13;
   --hos-barro: #a3372f;
   --hos-focus: #17634f;
   --hos-shadow: 20 35 30;
-
-  /* Motif colors for tiles drawn on the ground. */
-  --m-base: var(--hos-surface);
-  --m-a: var(--hos-glaze);
-  --m-b: var(--hos-ocre);
-  --m-grout: var(--hos-grout);
 }
 
 :root[data-mantine-color-scheme="dark"] {
@@ -46,13 +39,11 @@
   --hos-glaze-deep: #0a2a21;
   --hos-glaze-soft: #18382d;
   --hos-glaze-ink: #a6d1be;
-  --hos-tile-pale: #2a4339;
   --hos-ocre: #dfba68;
   --hos-ocre-ink: #ead095;
   --hos-barro: #e6a39b;
   --hos-focus: #76b79b;
   --hos-shadow: 0 0 0;
-  --m-base: #1d2b26;
 }
 
 * {
@@ -162,22 +153,12 @@ textarea {
 }
 
 .tile-mark {
+  display: inline-grid;
+  place-items: center;
   flex: none;
-  border-radius: 3px;
-  box-shadow: 0 1px 2px rgb(var(--hos-shadow) / 0.18);
-}
-
-.tile-run {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.barrado {
-  height: 14px;
-  margin-top: 16px;
-  border-radius: 3px;
-  overflow: hidden;
+  border-radius: 8px;
+  background: var(--hos-glaze-soft);
+  color: var(--hos-glaze-ink);
 }
 
 .stack {
@@ -265,10 +246,6 @@ textarea {
   padding: 0 6px env(safe-area-inset-bottom);
   background: var(--hos-glaze-deep);
   box-shadow: 0 -6px 20px -12px rgb(var(--hos-shadow) / 0.5);
-  --m-base: var(--hos-glaze-deep);
-  --m-a: #2f8a66;
-  --m-b: #d6a843;
-  --m-grout: #072219;
 }
 
 .frame-nav ul {
@@ -315,8 +292,7 @@ textarea {
   display: inline-flex;
 }
 
-.frame-user,
-.nav-tiles {
+.frame-user {
   display: none;
 }
 
@@ -576,13 +552,7 @@ textarea {
 }
 
 .flip-front {
-  --m-a: #a9c7b8;
-  --m-b: var(--hos-tile-pale);
-}
-:root[data-mantine-color-scheme="dark"] .flip-front {
-  --m-a: #3b5a4d;
-}
-.flip-front .tile-mark {
+  background: var(--hos-glaze-soft);
 }
 
 .flip-back {
@@ -960,15 +930,6 @@ textarea {
   position: relative;
   overflow: hidden;
   background: #0c3f32;
-  --m-base: #0c3f32;
-  --m-a: #2f8a66;
-  --m-b: #d6a843;
-  --m-grout: #072b21;
-}
-
-.auth-wall-tiles {
-  position: absolute;
-  inset: 0;
 }
 
 .auth-brand {
@@ -986,9 +947,6 @@ textarea {
   font-size: 1.25rem;
   font-weight: 800;
   box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.45);
-  --m-base: var(--hos-surface);
-  --m-a: var(--hos-glaze);
-  --m-b: var(--hos-ocre);
 }
 
 .auth-panel {
@@ -1039,12 +997,8 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 0 18px 20px;
+  padding: 20px 18px;
   overflow: hidden;
-}
-.onboarding-tile .barrado {
-  margin: 0 -18px 8px;
-  border-radius: 0;
 }
 
 .onboarding-icon {
@@ -1157,7 +1111,6 @@ textarea {
     background: var(--hos-glaze-deep);
     backdrop-filter: none;
     color: #fff;
-    --m-base: var(--hos-surface);
   }
   .frame-nav {
     position: sticky;
@@ -1189,18 +1142,13 @@ textarea {
   }
   .frame-user {
     display: block;
-    margin-top: 0;
+    margin-top: auto;
     padding: 14px 6px 16px;
     border-top: 1px solid rgb(255 255 255 / 0.12);
     color: #fff;
   }
   .frame-user .frame-user-house {
     color: rgb(255 255 255 / 0.72);
-  }
-  .nav-tiles {
-    display: block;
-    height: 84px;
-    margin: auto -12px 0;
   }
   .frame-main {
     grid-column: 2;
