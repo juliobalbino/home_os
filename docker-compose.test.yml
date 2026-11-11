@@ -51,7 +51,7 @@ services:
         condition: service_healthy
     networks:
       default: {}
-      pangolin:
+      traefik_proxy:
         aliases:
           - homeos-tests-frontend
     healthcheck:
@@ -64,6 +64,6 @@ volumes:
   postgres_data:
 networks:
   default:
-  pangolin:
+  traefik_proxy:
     external: true
-    name: pangolin
+    name: traefik_proxy
