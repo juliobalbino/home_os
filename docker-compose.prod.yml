@@ -51,7 +51,7 @@ services:
         condition: service_healthy
     networks:
       - default
-      - pangolin
+      - traefik_proxy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5173/"]
       interval: 15s
@@ -64,6 +64,6 @@ volumes:
 
 networks:
   default:
-  pangolin:
+  traefik_proxy:
     external: true
-    name: pangolin
+    name: traefik_proxy
