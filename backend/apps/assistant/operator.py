@@ -26,9 +26,9 @@ def _categories(user, household_id):
     from apps.finance.models import ExpenseCategory
 
     return list(
-        ExpenseCategory.objects.filter(household=member.household, is_active=True)
+        ExpenseCategory.objects.filter(household=member.household)
         .order_by("name", "id")[:MAX_ROWS]
-        .values("id", "name", "kind")
+        .values("id", "name", "kind", "is_active")
     )
 
 
@@ -54,9 +54,9 @@ def _finance(user, household_id):
             .order_by("-incurred_on", "-id")[:MAX_ROWS]
         ],
         "categories": list(
-            ExpenseCategory.objects.filter(household=member.household, is_active=True)
+            ExpenseCategory.objects.filter(household=member.household)
             .order_by("name", "id")[:MAX_ROWS]
-            .values("id", "name", "kind")
+            .values("id", "name", "kind", "is_active")
         ),
         "budgets": list(
             Budget.objects.filter(household=member.household)
@@ -78,9 +78,9 @@ def _products(user, household_id):
     from apps.shopping.models import Product
 
     return list(
-        Product.objects.filter(household=member.household, is_active=True)
+        Product.objects.filter(household=member.household)
         .order_by("name", "id")[:MAX_ROWS]
-        .values("id", "name", "brand", "category", "unit")
+        .values("id", "name", "brand", "category", "unit", "is_active")
     )
 
 
@@ -116,6 +116,7 @@ def _inventory(user, household_id):
 
     return [
         {
+            "id": row.id,
             "product_id": row.product_id,
             "name": row.product.name,
             "quantity": str(row.quantity),
@@ -339,6 +340,21 @@ INVITATION_SCHEMAS = {
     "propose_invitation_revocation": {"invitation_id"},
 }
 ACCOUNT_SCHEMAS = {"propose_account_deactivation": set()}
+EXTRA_WRITE_SCHEMAS = {
+    "update_household_settings": ({"name", "currency", "timezone"}, set()),
+    "update_shopping_list": (
+        {"shopping_list_id", "name", "status"},
+        {"shopping_list_id"},
+    ),
+    "update_expense_category": (
+        {"category_id", "name", "kind", "is_active"},
+        {"category_id"},
+    ),
+    "adjust_product_inventory": (
+        {"product_id", "event_type", "quantity_delta", "notes"},
+        {"product_id", "event_type", "quantity_delta", "notes"},
+    ),
+}
 CLEANUP_KEYS = (
     "shopping_list_ids",
     "product_ids",
@@ -348,6 +364,10 @@ CLEANUP_KEYS = (
 )
 
 DIRECT_WRITE_SUMMARIES = {
+    "update_household_settings": "Dados da residência atualizados",
+    "update_shopping_list": "Lista de compras atualizada",
+    "update_expense_category": "Categoria de despesa atualizada",
+    "adjust_product_inventory": "Estoque do produto atualizado",
     "create_shopping_list": "Lista de compras criada",
     "create_shopping_product": "Produto cadastrado",
     "update_shopping_product": "Produto atualizado",
@@ -373,6 +393,10 @@ def is_direct_write(name):
 
 
 TOOL_DESCRIPTIONS = {
+    "update_household_settings": "Update household name, currency, or timezone. Only the household owner can do this.",
+    "update_shopping_list": "Rename or change the status of an existing household shopping list.",
+    "update_expense_category": "Rename, classify, activate, or deactivate an expense category.",
+    "adjust_product_inventory": "Adjust a product's stock even when it has no inventory balance yet. Give a justification for adjustments and corrections.",
     "household_members": "Read household members, roles, and membership IDs before assigning chores or proposing access changes.",
     "finance_categories": "Read expense categories and category IDs for this household.",
     "finance_records": "Read expenses, payments, and budgets for this household.",
@@ -788,6 +812,10 @@ def _execute_write(name, arguments, user, household_id, request_uuid, call_index
                 request_uuid=request_uuid,
                 call_index=call_index,
             )
+        elif name in EXTRA_WRITE_SCHEMAS:
+            from apps.assistant import mutations
+
+            result = getattr(mutations, name)(user, household_id, arguments)
         elif name in CHORE_SCHEMAS:
             result = _chore_write(name, user, household_id, arguments)
         else:
@@ -861,6 +889,87 @@ def tool_definitions():
         }
         for name in TOOLS
     ]
+    definitions.append(
+        {
+            "type": "function",
+            "name": "search_household_records",
+            "description": "Search all household records by name or ID, including inactive records, with pagination. Use this to find exact IDs before changing data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "enum": [
+                            "products",
+                            "product_aliases",
+                            "price_observations",
+                            "shopping_lists",
+                            "shopping_list_items",
+                            "inventory_items",
+                            "inventory_events",
+                            "purchases",
+                            "purchase_items",
+                            "chores",
+                            "chore_occurrences",
+                            "categories",
+                            "expenses",
+                            "payments",
+                            "budgets",
+                            "members",
+                            "invitations",
+                        ],
+                    },
+                    "query": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                },
+                "required": ["entity", "query", "offset"],
+                "additionalProperties": False,
+            },
+        }
+    )
+    for name, (allowed, required) in EXTRA_WRITE_SCHEMAS.items():
+        properties = {
+            "currency": {"type": "string"},
+            "timezone": {"type": "string"},
+            "shopping_list_id": {"type": "integer"},
+            "category_id": {"type": "integer"},
+            "product_id": {"type": "integer"},
+            "name": {"type": "string"},
+            "status": {"type": "string", "enum": ["active", "completed", "archived"]},
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "general",
+                    "food",
+                    "transport",
+                    "housing",
+                    "health",
+                    "entertainment",
+                    "utilities",
+                    "other",
+                ],
+            },
+            "is_active": {"type": "boolean"},
+            "event_type": {
+                "type": "string",
+                "enum": ["consumption", "adjustment", "loss", "correction"],
+            },
+            "quantity_delta": {"type": "string"},
+            "notes": {"type": "string"},
+        }
+        definitions.append(
+            {
+                "type": "function",
+                "name": name,
+                "description": TOOL_DESCRIPTIONS[name],
+                "parameters": {
+                    "type": "object",
+                    "properties": {key: properties[key] for key in allowed},
+                    "required": sorted(required),
+                    "additionalProperties": False,
+                },
+            }
+        )
     definitions.append(
         {
             "type": "function",
@@ -1202,8 +1311,25 @@ def dispatch_tool(
         or name in MEMBERSHIP_SCHEMAS
         or name in INVITATION_SCHEMAS
         or name in ACCOUNT_SCHEMAS
+        or name in EXTRA_WRITE_SCHEMAS
     )
     if write_name:
+        if name in EXTRA_WRITE_SCHEMAS:
+            allowed, required = EXTRA_WRITE_SCHEMAS[name]
+            if (
+                not isinstance(arguments, dict)
+                or set(arguments) - allowed
+                or not required <= set(arguments)
+                or (name != "adjust_product_inventory" and set(arguments) == required)
+            ):
+                raise ValueError("Invalid assistant tool arguments")
+            for key in (
+                "shopping_list_id",
+                "category_id",
+                "product_id",
+            ) & arguments.keys():
+                if type(arguments[key]) is not int or arguments[key] <= 0:
+                    raise ValueError("Invalid assistant tool arguments")
         if name == "propose_record_cleanup":
             from apps.assistant.cleanup import validate_selection
 
@@ -1349,6 +1475,10 @@ def dispatch_tool(
         return _execute_write(
             name, arguments, user, household_id, request_uuid, call_index
         )
+    if name == "search_household_records":
+        from apps.assistant.catalog import search_records
+
+        return search_records(user, household_id, arguments)
     entry = TOOLS.get(name)
     if not entry:
         raise ValueError("Unsupported assistant tool")

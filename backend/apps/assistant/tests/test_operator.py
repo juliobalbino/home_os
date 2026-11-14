@@ -69,6 +69,82 @@ class OperatorReadTests(TestCase):
         self.assertIn("chore", definitions["create_chore"].lower())
         self.assertIn("necessary", definitions["ask_clarification"].lower())
 
+    def test_search_finds_inactive_records_beyond_the_first_page(self):
+        for number in range(105):
+            Product.objects.create(
+                household=self.household,
+                name=f"Produto {number:03d}",
+                unit="un",
+                is_active=number != 104,
+            )
+        result = dispatch_tool(
+            "search_household_records",
+            {"entity": "products", "query": "Produto", "offset": 100},
+            user=self.owner,
+            household_id=self.household.id,
+        )
+        self.assertEqual(result["total"], 105)
+        self.assertEqual(result["items"][-1]["name"], "Produto 104")
+        self.assertFalse(result["items"][-1]["is_active"])
+        self.assertIsInstance(result["items"][-1]["id"], int)
+
+    def test_search_does_not_return_records_from_another_household(self):
+        other = Household.objects.create(name="Other", created_by=self.owner)
+        Product.objects.create(household=other, name="Segredo", unit="un")
+        result = dispatch_tool(
+            "search_household_records",
+            {"entity": "products", "query": "Segredo", "offset": 0},
+            user=self.owner,
+            household_id=self.household.id,
+        )
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["items"], [])
+
+    def test_search_supports_every_advertised_entity(self):
+        tool = next(
+            item for item in tool_definitions() if item["name"] == "search_household_records"
+        )
+        for entity in tool["parameters"]["properties"]["entity"]["enum"]:
+            with self.subTest(entity=entity):
+                result = dispatch_tool(
+                    "search_household_records",
+                    {"entity": entity, "query": "", "offset": 0},
+                    user=self.owner, household_id=self.household.id,
+                )
+                self.assertEqual(result["total"], 1 if entity == "members" else 0)
+
+    def test_inventory_read_exposes_item_id_for_adjustment(self):
+        product = Product.objects.create(
+            household=self.household, name="Café", unit="un"
+        )
+        item = InventoryItem.objects.create(
+            household=self.household, product=product, quantity=Decimal("2"), unit="un"
+        )
+        result = dispatch_tool(
+            "inventory", {}, user=self.owner, household_id=self.household.id
+        )
+        self.assertEqual(result[0]["id"], item.pk)
+
+    def test_product_read_includes_inactive_products(self):
+        product = Product.objects.create(
+            household=self.household, name="Café", unit="un", is_active=False
+        )
+        result = dispatch_tool(
+            "shopping_products", {}, user=self.owner, household_id=self.household.id
+        )
+        self.assertEqual(result[0]["id"], product.pk)
+        self.assertFalse(result[0]["is_active"])
+
+    def test_category_read_includes_inactive_categories(self):
+        category = ExpenseCategory.objects.create(
+            household=self.household, name="Lazer", is_active=False
+        )
+        result = dispatch_tool(
+            "finance_categories", {}, user=self.owner, household_id=self.household.id
+        )
+        self.assertEqual(result[0]["id"], category.pk)
+        self.assertFalse(result[0]["is_active"])
+
     def test_operator_returns_clickable_choices_without_writing(self):
         from unittest.mock import patch
         from apps.assistant.services import _operator_completion
@@ -527,6 +603,53 @@ class OperatorShoppingListWriteTests(TestCase):
         self.assertEqual(result["id"], shopping_list.id)
         self.assertEqual(AuditEvent.objects.count(), 1)
 
+    def test_list_can_be_renamed_and_archived_with_audit(self):
+        row = ShoppingList.objects.create(
+            household=self.household, name="Old", created_by=self.owner
+        )
+        result = dispatch_tool(
+            "update_shopping_list",
+            {"shopping_list_id": row.id, "name": "New", "status": "archived"},
+            user=self.owner,
+            household_id=self.household.id,
+            request_uuid=self.REQUEST_UUID,
+            call_index=1,
+        )
+        row.refresh_from_db()
+        self.assertEqual((row.name, row.status), ("New", "archived"))
+        self.assertEqual(result["id"], row.id)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action="shopping_list.updated", entity_id=str(row.id)
+            ).exists()
+        )
+
+    def test_owner_can_update_household_settings_but_viewer_cannot(self):
+        args = {"name": "Casa Nova", "timezone": "America/Manaus", "currency": "USD"}
+        with self.assertRaises(PermissionDenied):
+            dispatch_tool(
+                "update_household_settings",
+                args,
+                user=self.viewer,
+                household_id=self.household.id,
+                request_uuid=self.REQUEST_UUID,
+                call_index=2,
+            )
+        result = dispatch_tool(
+            "update_household_settings",
+            args,
+            user=self.owner,
+            household_id=self.household.id,
+            request_uuid=self.REQUEST_UUID,
+            call_index=2,
+        )
+        self.household.refresh_from_db()
+        self.assertEqual(
+            (self.household.name, self.household.timezone, self.household.currency),
+            ("Casa Nova", "America/Manaus", "USD"),
+        )
+        self.assertEqual(result["name"], "Casa Nova")
+
 
 class OperatorFinanceWriteTests(TestCase):
     REQUEST_UUID = "5d90f5bb-29ad-42af-81c3-fdbb434a4f68"
@@ -595,6 +718,27 @@ class OperatorFinanceWriteTests(TestCase):
         }
         arguments.update(overrides)
         return arguments
+
+    def test_category_can_be_renamed_and_reactivated(self):
+        self.category.is_active = False
+        self.category.save(update_fields=["is_active"])
+        result = self._call(
+            "update_expense_category",
+            {
+                "category_id": self.category.id,
+                "name": "Bills",
+                "is_active": True,
+            },
+            18,
+        )
+        self.category.refresh_from_db()
+        self.assertEqual((self.category.name, self.category.is_active), ("Bills", True))
+        self.assertEqual(result["id"], self.category.id)
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                action="category.updated", entity_id=str(self.category.id)
+            ).exists()
+        )
 
     def test_create_expense_is_scoped_split_audited_and_idempotent(self):
         arguments = self._expense_arguments()
@@ -1000,6 +1144,42 @@ class OperatorShoppingInventoryWriteTests(TestCase):
             household_id=household_id or self.household.id,
             request_uuid=self.REQUEST_UUID,
             call_index=call_index,
+        )
+
+    def test_stock_can_be_adjusted_before_first_purchase(self):
+        result = self._call(
+            "adjust_product_inventory",
+            {
+                "product_id": self.product.id,
+                "event_type": "adjustment",
+                "quantity_delta": "2",
+                "notes": "Contagem inicial",
+            },
+            19,
+        )
+        item = InventoryItem.objects.get(product=self.product)
+        self.assertEqual(item.quantity, Decimal("2"))
+        self.assertEqual(result["inventory_item_id"], item.id)
+        self.assertEqual(InventoryEvent.objects.filter(item=item).count(), 1)
+
+    def test_stock_adjustment_is_scoped_and_idempotent(self):
+        arguments = {
+            "product_id": self.foreign_product.id,
+            "event_type": "adjustment",
+            "quantity_delta": "1",
+            "notes": "Contagem",
+        }
+        with self.assertRaises(ValidationError):
+            self._call("adjust_product_inventory", arguments, 20)
+        self.assertFalse(
+            InventoryItem.objects.filter(product=self.foreign_product).exists()
+        )
+        arguments["product_id"] = self.product.id
+        first = self._call("adjust_product_inventory", arguments, 20)
+        second = self._call("adjust_product_inventory", arguments, 20)
+        self.assertEqual(first, second)
+        self.assertEqual(
+            InventoryEvent.objects.filter(item__product=self.product).count(), 1
         )
 
     def test_product_create_update_alias_and_price_are_scoped_validated_and_audited(

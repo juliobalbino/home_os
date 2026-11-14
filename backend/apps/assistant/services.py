@@ -502,6 +502,8 @@ def _operator_completion(*, model, token, text, user, household_id, request_uuid
             "Decida automaticamente: responda perguntas gerais, consulte dados da casa com as ferramentas de leitura "
             "e execute pedidos de alteração com as ferramentas de escrita. "
             "Se faltar um identificador, consulte os dados antes de escrever. "
+            "Use search_household_records para buscar nomes e IDs em todos os registros, inclusive os inativos "
+            "e os que estiverem fora da primeira página. Continue pelas páginas até localizar o registro correto. "
             "Execute pedidos claros sem fazer perguntas. Use valores padrão seguros para detalhes opcionais. "
             "Somente se uma decisão indispensável continuar ambígua após consultar os dados, "
             "chame ask_clarification com 2 a 4 alternativas curtas antes de qualquer escrita. "
@@ -545,7 +547,7 @@ def _operator_completion(*, model, token, text, user, household_id, request_uuid
             return [safe_tool_result(item) for item in value]
         return value
 
-    for step in range(4):
+    for step in range(8):
         request = urllib.request.Request(
             "https://api.openai.com/v1/responses",
             data=json.dumps(body).encode(),
