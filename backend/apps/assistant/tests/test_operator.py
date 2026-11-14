@@ -102,14 +102,17 @@ class OperatorReadTests(TestCase):
 
     def test_search_supports_every_advertised_entity(self):
         tool = next(
-            item for item in tool_definitions() if item["name"] == "search_household_records"
+            item
+            for item in tool_definitions()
+            if item["name"] == "search_household_records"
         )
         for entity in tool["parameters"]["properties"]["entity"]["enum"]:
             with self.subTest(entity=entity):
                 result = dispatch_tool(
                     "search_household_records",
                     {"entity": entity, "query": "", "offset": 0},
-                    user=self.owner, household_id=self.household.id,
+                    user=self.owner,
+                    household_id=self.household.id,
                 )
                 self.assertEqual(result["total"], 1 if entity == "members" else 0)
 
