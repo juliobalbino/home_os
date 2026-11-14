@@ -425,6 +425,63 @@ describe("Assistant", () => {
     expect(screen.queryByText(/exclusão concluída/i)).not.toBeInTheDocument();
   });
 
+  it("shows each record in a cleanup proposal before confirmation", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/assistant/status"))
+        return new Response(JSON.stringify({ enabled: true, connected: true }));
+      if (url.endsWith("/auth/csrf"))
+        return new Response(JSON.stringify({ csrfToken: "test" }));
+      if (url.endsWith("/assistant") && init?.method !== "POST")
+        return new Response(JSON.stringify({ clarification: null }));
+      if (url.endsWith("/assistant") && init?.method === "POST")
+        return new Response(
+          JSON.stringify({
+            text: "Confira os registros antes de remover.",
+            applied: [],
+            issues: [],
+            requires_confirmation: true,
+            actions: [
+              {
+                proposal_id: "cleanup-1",
+                kind: "record_cleanup",
+                title: "Remover registros selecionados?",
+                summary: "Remover 2 registros.",
+                details: {
+                  records: [
+                    { type: "Lista", id: 1, name: "DEMO - Lista semanal" },
+                    {
+                      type: "Despesa",
+                      id: 2,
+                      name: "Cinema",
+                      detail: "BRL 25,00 · 01/11/2026 · Lazer DEMO",
+                    },
+                  ],
+                  dependent_count: 3,
+                },
+                expires_at: "2030-01-01T00:00:00Z",
+              },
+            ],
+          }),
+        );
+      throw new Error(url);
+    });
+    render(<Assistant householdId="h-1" role="member" />);
+    fireEvent.change(await screen.findByLabelText(/pedido/i), {
+      target: { value: "Remova os dados de demonstração" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enviar pedido/i }));
+    expect(await screen.findByText("DEMO - Lista semanal")).toBeInTheDocument();
+    expect(screen.getByText("Cinema")).toBeInTheDocument();
+    expect(
+      screen.getByText("BRL 25,00 · 01/11/2026 · Lazer DEMO"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/3 registros vinculados/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Confirmar exclusão" }),
+    ).toBeEnabled();
+  });
+
   it("confirms a deletion proposal with CSRF and reports completion", async () => {
     const fetchMock = mockProposalFetch();
     const onDataChanged = vi.fn();

@@ -650,6 +650,12 @@ def confirm_proposal(*, user, household_id, proposal_id, confirm):
 
         if proposal.action_type == "generate_chore_occurrences":
             return _confirm_chore_generation(proposal, user, household)
+        if proposal.action_type == "record_cleanup":
+            from apps.assistant.cleanup import confirm_record_cleanup
+
+            return confirm_record_cleanup(
+                proposal=proposal, user=user, household=household
+            )
         if proposal.action_type == "membership_role_change":
             from apps.households.models import Membership
 

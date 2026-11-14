@@ -50,6 +50,13 @@ type ActionProposal = {
   title: string;
   summary: string;
   details: {
+    records?: Array<{
+      type: string;
+      id: number;
+      name: string;
+      detail?: string;
+    }>;
+    dependent_count?: number;
     list?: { name?: string; status?: string };
     items?: Array<{
       product_name?: string | null;
@@ -121,6 +128,7 @@ function AssistantActionProposal({
   busy: boolean;
 }) {
   const isDelete = proposal.kind === "delete_shopping_list";
+  const isDestructive = isDelete || proposal.kind === "record_cleanup";
   const terminal = proposal.localStatus && proposal.localStatus !== "pending";
   return (
     <Card
@@ -132,6 +140,32 @@ function AssistantActionProposal({
     >
       <Title order={4}>{proposal.title}</Title>
       <Text>{proposal.summary}</Text>
+      {proposal.kind === "record_cleanup" && (
+        <>
+          <ul aria-label="Registros a remover">
+            {(proposal.details.records ?? []).map((record) => (
+              <li key={`${record.type}-${record.id}`}>
+                <Text component="span" fw={700}>
+                  {record.name}
+                </Text>
+                <Text component="span" size="sm">
+                  {" "}
+                  — {record.type}
+                </Text>
+                {record.detail && (
+                  <Text size="sm" c="dimmed">
+                    {record.detail}
+                  </Text>
+                )}
+              </li>
+            ))}
+          </ul>
+          <Text size="sm">
+            {proposal.details.dependent_count ?? 0} registros vinculados também
+            serão removidos.
+          </Text>
+        </>
+      )}
       {isDelete && (
         <>
           <Text fw={700} mt="sm">
@@ -180,7 +214,7 @@ function AssistantActionProposal({
             loading={busy}
             disabled={busy}
           >
-            {isDelete ? "Confirmar exclusão" : "Confirmar ação"}
+            {isDestructive ? "Confirmar exclusão" : "Confirmar ação"}
           </Button>
           <Button
             variant="default"
@@ -460,7 +494,9 @@ export default function Assistant({
                       ...item,
                       localStatus: confirm ? "completed" : "cancelled",
                       feedback: confirm
-                        ? proposal.kind === "delete_shopping_list"
+                        ? ["delete_shopping_list", "record_cleanup"].includes(
+                            proposal.kind,
+                          )
                           ? "Exclusão concluída com sucesso."
                           : "Ação concluída com sucesso."
                         : "Proposta cancelada.",

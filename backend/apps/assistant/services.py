@@ -492,6 +492,7 @@ def _record_usage(user, household_id):
 
 def _operator_completion(*, model, token, text, user, household_id, request_uuid=None):
     from apps.assistant.operator import dispatch_tool, is_direct_write, tool_definitions
+    from apps.assistant.cleanup import CleanupBlocked
 
     input_items = [{"role": "user", "content": text}]
     body = {
@@ -666,17 +667,27 @@ def _operator_completion(*, model, token, text, user, household_id, request_uuid
                 encoded = json.dumps(
                     safe_tool_result(result), ensure_ascii=False, default=str
                 )[:12000]
-            except Exception:
-                encoded = '{"error":"Tool request was invalid or unavailable."}'
+            except Exception as exc:
+                logger.warning(
+                    "Assistant tool failed: tool=%s exception=%s",
+                    call.get("name", "unknown"),
+                    type(exc).__name__,
+                )
+                message = (
+                    exc.safe_message
+                    if isinstance(exc, CleanupBlocked)
+                    else (
+                        "Não foi possível concluir esta alteração."
+                        if is_direct_write(call.get("name"))
+                        or str(call.get("name", "")).startswith("propose_")
+                        else "Não foi possível consultar estes dados."
+                    )
+                )
+                encoded = json.dumps({"error": message}, ensure_ascii=False)
                 issues.append(
                     {
                         "tool": call.get("name", "unknown"),
-                        "message": (
-                            "Não foi possível concluir esta alteração."
-                            if is_direct_write(call.get("name"))
-                            or str(call.get("name", "")).startswith("propose_")
-                            else "Não foi possível consultar estes dados."
-                        ),
+                        "message": message,
                     }
                 )
             results.append(

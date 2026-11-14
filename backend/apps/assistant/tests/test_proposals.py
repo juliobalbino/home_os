@@ -93,6 +93,17 @@ class ShoppingListDeletionProposalTests(TestCase):
         # boundary, rather than preventing this module from importing.
         return apps.get_model("assistant", "AssistantActionProposal")
 
+    def test_numeric_list_id_from_model_can_prepare_proposal(self):
+        card = dispatch_tool(
+            "propose_shopping_list_deletion",
+            {"shopping_list_id": str(self.shopping_list.pk)},
+            user=self.owner,
+            household_id=self.household.pk,
+            request_uuid="00000000-0000-4000-8000-000000000099",
+            call_index=0,
+        )
+        self.assertEqual(card["kind"], "delete_shopping_list")
+
     def _confirm(self, user, proposal_id, *, household_id=None, confirm=True):
         self.client.force_authenticate(user)
         household_id = household_id or self.household.pk

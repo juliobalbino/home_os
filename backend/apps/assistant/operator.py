@@ -339,6 +339,13 @@ INVITATION_SCHEMAS = {
     "propose_invitation_revocation": {"invitation_id"},
 }
 ACCOUNT_SCHEMAS = {"propose_account_deactivation": set()}
+CLEANUP_KEYS = (
+    "shopping_list_ids",
+    "product_ids",
+    "chore_ids",
+    "category_ids",
+    "expense_ids",
+)
 
 DIRECT_WRITE_SUMMARIES = {
     "create_shopping_list": "Lista de compras criada",
@@ -726,6 +733,12 @@ def _execute_write(name, arguments, user, household_id, request_uuid, call_index
                 household_id=household_id,
                 shopping_list_id=arguments["shopping_list_id"],
             )
+        elif name == "propose_record_cleanup":
+            from apps.assistant.cleanup import create_record_cleanup
+
+            result = create_record_cleanup(
+                user=user, household_id=household_id, selection=arguments
+            )
         elif name == "propose_chore_occurrence_generation":
             from apps.assistant.proposals import create_chore_occurrence_generation
 
@@ -848,6 +861,27 @@ def tool_definitions():
         }
         for name in TOOLS
     ]
+    definitions.append(
+        {
+            "type": "function",
+            "name": "propose_record_cleanup",
+            "description": (
+                "Prepare an explicit-confirmation proposal to permanently remove exact household "
+                "lists, products, chores, finance categories, and expenses by their IDs. "
+                "Read records first. Include every related record intended for removal. "
+                "Never include a record merely because it has a similar name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    key: {"type": "array", "items": {"type": "integer"}}
+                    for key in CLEANUP_KEYS
+                },
+                "required": list(CLEANUP_KEYS),
+                "additionalProperties": False,
+            },
+        }
+    )
     definitions.append(
         {
             "type": "function",
@@ -1161,6 +1195,7 @@ def dispatch_tool(
 ):
     write_name = (
         name == "create_shopping_list"
+        or name == "propose_record_cleanup"
         or name in FINANCE_SCHEMAS
         or name in SHOPPING_SCHEMAS
         or name in CHORE_SCHEMAS
@@ -1169,6 +1204,10 @@ def dispatch_tool(
         or name in ACCOUNT_SCHEMAS
     )
     if write_name:
+        if name == "propose_record_cleanup":
+            from apps.assistant.cleanup import validate_selection
+
+            arguments = validate_selection(arguments)
         if name == "create_shopping_list" and (
             not isinstance(arguments, dict) or set(arguments) != {"name"}
         ):
@@ -1219,6 +1258,17 @@ def dispatch_tool(
             ):
                 raise ValueError("Invalid assistant tool arguments")
         if name in SHOPPING_SCHEMAS:
+            if (
+                name == "propose_shopping_list_deletion"
+                and isinstance(arguments, dict)
+                and set(arguments) == {"shopping_list_id"}
+                and isinstance(arguments["shopping_list_id"], str)
+            ):
+                import re
+
+                value = arguments["shopping_list_id"]
+                if re.fullmatch(r"[1-9][0-9]{0,17}", value):
+                    arguments = {"shopping_list_id": int(value)}
             required = {
                 "propose_chore_occurrence_generation": {
                     "chore_id",
